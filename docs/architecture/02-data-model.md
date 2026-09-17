@@ -26,6 +26,7 @@ class GeocodeStatus(StrEnum): PENDING, OK, NOT_FOUND, AMBIGUOUS, FAILED, MANUAL
 class LocationSource(StrEnum): CUSTOMER_PIN, GEOCODER, OPERATOR, COURIER
 class DeliveryStatus(StrEnum): PENDING, AWAITING_DISPATCH, DISPATCHED, DELIVERED, FAILED, CANCELLED
 class DispatchProvider(StrEnum): MAXIM_MANUAL, MAXIM_API
+class ExpenseCategory(StrEnum): INGREDIENTS, PACKAGING, DELIVERY, MARKETING, RENT, SALARY, EQUIPMENT, OTHER
 ```
 
 Все StrEnum — значение равно имени (кроме `Language`: `"ru"`, `"tg"`).
@@ -195,7 +196,19 @@ key str(64) PK; value JSON; updated_by_user_id FK→users?; updated_at. Типи
 ## daily_reports — `DailyReport`
 id PK; report_date date U; data JSON; text text; generated_at datetime.
 
+## expenses — `Expense` (расходы бизнеса, добавлено 17.09.2026)
+| колонка | тип | примечание |
+|---|---|---|
+| id | int PK | |
+| expense_date | date IX | бизнес-дата расхода; не в будущем (проверяет `ExpenseService`) |
+| category | ExpenseCategory | продукты, упаковка, доставка, реклама, аренда, зарплата, оборудование, прочее |
+| amount | money | `> 0` (CHECK `ck_expenses_amount_positive`) |
+| comment | text? | что именно купили/оплатили |
+| created_by_user_id | FK→users? (SET NULL) | кто добавил |
+
+Правила учёта в прибыли — `03-business-rules.md` §4 «Расходы и прибыль».
+
 ## Индексы и ограничения (минимум)
-- `orders (delivery_date, status)`, `orders (customer_id, status)`, `messages (conversation_id, created_at)`.
-- CHECK: `order_items.quantity > 0`, `products.price > 0`, `payments.amount > 0`.
+- `orders (delivery_date, status)`, `orders (customer_id, status)`, `messages (conversation_id, created_at)`, `expenses (expense_date)`.
+- CHECK: `order_items.quantity > 0`, `products.price > 0`, `payments.amount > 0`, `expenses.amount > 0`.
 - Alembic-миграция `0001_initial` создаёт всё перечисленное и должна применяться на PostgreSQL (`alembic upgrade head`).

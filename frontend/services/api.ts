@@ -28,6 +28,10 @@ import type {
   DeliveryUpdate,
   DispatchResultOut,
   DispatchSheetOut,
+  ExpenseCreate,
+  ExpenseListParams,
+  ExpenseOut,
+  ExpenseUpdate,
   FaqCreate,
   FaqListParams,
   FaqOut,
@@ -66,6 +70,7 @@ import type {
   SendMessageRequest,
   StatisticsOut,
   StatisticsParams,
+  TestChatOut,
   TimeseriesParams,
   TimeseriesPoint,
   TokenPair,
@@ -147,6 +152,17 @@ export const statisticsApi = {
   timeseries: (params?: TimeseriesParams) => http.get<TimeseriesPoint[]>("/statistics/timeseries", params),
 };
 
+/* 7a. Expenses */
+export const expensesApi = {
+  list: (params?: ExpenseListParams) => http.get<Page<ExpenseOut>>("/expenses", params),
+  /** ADMIN */
+  create: (body: ExpenseCreate) => http.post<ExpenseOut>("/expenses", body),
+  /** ADMIN */
+  update: (id: Id, body: ExpenseUpdate) => http.patch<ExpenseOut>(`/expenses/${seg(id)}`, body),
+  /** ADMIN, physical delete → 204 */
+  remove: (id: Id) => http.delete<void>(`/expenses/${seg(id)}`),
+};
+
 /* 8. Reports */
 export const reportsApi = {
   daily: (params?: DailyReportParams) => http.get<DailyReportOut>("/reports/daily", params),
@@ -199,6 +215,13 @@ export const conversationsApi = {
   resume: (id: Id) => http.post<ConversationDetail>(`/conversations/${seg(id)}/resume`),
   /** needs_attention=false → 204 */
   markRead: (id: Id) => http.post<void>(`/conversations/${seg(id)}/read`),
+};
+
+/* 11a. Test chat (dev only, 404 elsewhere) */
+export const testChatApi = {
+  get: (customerKey: string) => http.get<TestChatOut>(`/test-chat/${seg(customerKey)}`),
+  sendMessage: (customerKey: string, body: SendMessageRequest) =>
+    http.post<TestChatOut>(`/test-chat/${seg(customerKey)}/messages`, body),
 };
 
 /* 12. Settings */

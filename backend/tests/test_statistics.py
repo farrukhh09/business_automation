@@ -13,12 +13,14 @@ from app.core.exceptions import BadRequestError, ValidationError
 from app.core.time import business_today
 from app.models.conversation import Conversation
 from app.models.customer import Customer
-from app.models.enums import DeliveryType, OrderStatus, PaymentStatus
+from app.models.enums import DeliveryType, ExpenseCategory, OrderStatus, PaymentStatus
+from app.models.expense import Expense
 from app.models.product import Product
 from app.services.statistics_service import (
     MAX_PERIOD_DAYS,
     Period,
     StatisticsService,
+    profit_and_loss,
     resolve_date_basis,
     resolve_period,
 )
@@ -223,6 +225,103 @@ class TestFinance:
 
         assert service.statistics(period(TODAY)).finance.orders_count == 0
         assert service.statistics(period(TODAY - timedelta(days=1), TODAY + timedelta(days=1))).finance.orders_count == 2
+
+
+# --------------------------------------------------------------------------- expenses and profit
+
+
+class TestProfitAndLoss:
+    def test_profit_is_revenue_minus_expenses_of_the_period(
+        self,
+        service: StatisticsService,
+        product: Product,
+        make_order: Callable[..., Any],
+        make_expense: Callable[..., Expense],
+    ) -> None:
+        make_order(items=[(product, 6)], status=OrderStatus.CONFIRMED, delivery_date=TODAY)  # 3000
+        make_expense("800.00", TODAY, ExpenseCategory.INGREDIENTS)
+        make_expense("200.00", TODAY, ExpenseCategory.PACKAGING)
+        make_expense("5000.00", YESTERDAY, ExpenseCategory.RENT)  # another period
+
+        pnl = service.statistics(period(TODAY)).profit_and_loss
+
+        assert pnl.revenue == Decimal("3000.00")
+        assert pnl.expenses == Decimal("1000.00")
+        assert pnl.profit == Decimal("2000.00")
+        assert pnl.margin_percent == 66.7
+
+    def test_loss_gives_a_negative_profit_and_margin(
+        self,
+        service: StatisticsService,
+        product: Product,
+        make_order: Callable[..., Any],
+        make_expense: Callable[..., Expense],
+    ) -> None:
+        make_order(items=[(product, 1)], status=OrderStatus.CONFIRMED, delivery_date=TODAY)  # 500
+        make_expense("750.00", TODAY)
+
+        pnl = service.statistics(period(TODAY)).profit_and_loss
+
+        assert pnl.profit == Decimal("-250.00")
+        assert pnl.margin_percent == -50.0
+
+    def test_margin_is_null_without_revenue(
+        self, service: StatisticsService, make_expense: Callable[..., Expense]
+    ) -> None:
+        make_expense("120.00", TODAY)
+
+        pnl = service.statistics(period(TODAY)).profit_and_loss
+
+        assert (pnl.revenue, pnl.expenses, pnl.profit) == (Decimal("0.00"), Decimal("120.00"), Decimal("-120.00"))
+        assert pnl.margin_percent is None
+
+    def test_empty_period_is_all_zeros(self, service: StatisticsService) -> None:
+        pnl = service.statistics(period(TODAY)).profit_and_loss
+
+        assert (pnl.revenue, pnl.expenses, pnl.profit) == (Decimal("0.00"), Decimal("0.00"), Decimal("0.00"))
+        assert pnl.margin_percent is None
+        assert pnl.expenses_by_category == []
+
+    def test_categories_are_summed_and_sorted_largest_first(
+        self, service: StatisticsService, make_expense: Callable[..., Expense]
+    ) -> None:
+        make_expense("100.00", TODAY, ExpenseCategory.PACKAGING)
+        make_expense("300.00", TODAY, ExpenseCategory.INGREDIENTS)
+        make_expense("150.00", TODAY, ExpenseCategory.PACKAGING)
+        make_expense("250.00", TODAY, ExpenseCategory.DELIVERY)
+
+        totals = service.statistics(period(TODAY)).profit_and_loss.expenses_by_category
+
+        assert [(item.category, item.amount) for item in totals] == [
+            (ExpenseCategory.INGREDIENTS, Decimal("300.00")),
+            (ExpenseCategory.PACKAGING, Decimal("250.00")),
+            (ExpenseCategory.DELIVERY, Decimal("250.00")),  # a tie keeps the category order
+        ]
+
+    def test_expenses_follow_their_own_date_whatever_the_basis(
+        self,
+        service: StatisticsService,
+        product: Product,
+        make_order: Callable[..., Any],
+        make_expense: Callable[..., Expense],
+    ) -> None:
+        make_order(
+            items=[(product, 2)],
+            status=OrderStatus.CONFIRMED,
+            delivery_date=date(2026, 10, 1),
+            confirmed_at=datetime(2026, 9, 16, 8, 0, tzinfo=UTC),
+        )
+        make_expense("400.00", TODAY)
+
+        pnl = service.statistics(period(TODAY), "created").profit_and_loss
+
+        assert (pnl.revenue, pnl.expenses, pnl.profit) == (Decimal("1000.00"), Decimal("400.00"), Decimal("600.00"))
+
+    def test_margin_is_rounded_half_up_to_one_decimal(self) -> None:
+        pnl = profit_and_loss(Decimal("3000.00"), {ExpenseCategory.OTHER: Decimal("1000.50")})
+
+        assert pnl.profit == Decimal("1999.50")
+        assert pnl.margin_percent == 66.7  # 66.65 → 66.7
 
 
 # --------------------------------------------------------------------------- date basis
@@ -501,6 +600,25 @@ class TestTimeseries:
 
         assert [(point.date, point.orders_count) for point in points] == [(YESTERDAY, 0), (TODAY, 1)]
 
+    def test_expenses_and_profit_per_day(
+        self,
+        service: StatisticsService,
+        product: Product,
+        make_order: Callable[..., Any],
+        make_expense: Callable[..., Expense],
+    ) -> None:
+        make_order(items=[(product, 2)], status=OrderStatus.CONFIRMED, delivery_date=TODAY)  # 1000
+        make_expense("300.00", TODAY)
+        make_expense("50.00", TODAY, ExpenseCategory.PACKAGING)
+        make_expense("200.00", YESTERDAY)
+
+        points = service.timeseries(YESTERDAY, TODAY)
+
+        assert [(point.expenses, point.profit) for point in points] == [
+            (Decimal("200.00"), Decimal("-200.00")),
+            (Decimal("350.00"), Decimal("650.00")),
+        ]
+
     def test_defaults_to_the_last_thirty_days(self, service: StatisticsService) -> None:
         points = service.timeseries(today=TODAY)
 
@@ -542,6 +660,13 @@ class TestStatisticsApi:
         assert body["finance"]["paid_amount"] == 1000.0
         assert body["finance"]["average_check"] == 1000.0
         assert body["delivery"] == {"delivery_orders": 1, "pickup_orders": 0}
+        assert body["profit_and_loss"] == {
+            "revenue": 1000.0,
+            "expenses": 0.0,
+            "profit": 1000.0,
+            "margin_percent": 100.0,
+            "expenses_by_category": [],
+        }
         assert set(body["customers"]) == {
             "new_customers",
             "regular_customers",
@@ -594,8 +719,22 @@ class TestStatisticsApi:
 
         assert response.status_code == 200
         assert response.json() == [
-            {"date": (today - timedelta(days=1)).isoformat(), "revenue": 0.0, "orders_count": 0, "paid_amount": 0.0},
-            {"date": today.isoformat(), "revenue": 500.0, "orders_count": 1, "paid_amount": 0.0},
+            {
+                "date": (today - timedelta(days=1)).isoformat(),
+                "revenue": 0.0,
+                "orders_count": 0,
+                "paid_amount": 0.0,
+                "expenses": 0.0,
+                "profit": 0.0,
+            },
+            {
+                "date": today.isoformat(),
+                "revenue": 500.0,
+                "orders_count": 1,
+                "paid_amount": 0.0,
+                "expenses": 0.0,
+                "profit": 500.0,
+            },
         ]
 
     @pytest.mark.parametrize("path", ["/api/statistics", "/api/statistics/dashboard", "/api/statistics/timeseries"])

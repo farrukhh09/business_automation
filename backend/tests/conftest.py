@@ -43,8 +43,16 @@ from app.core.rate_limit import limiter
 from app.core.security import create_access_token, hash_password
 from app.core.time import business_today, now_utc
 from app.main import create_app
-from app.models import Base, Customer, Delivery, Order, OrderItem, Payment, Product, User
-from app.models.enums import DeliveryType, OrderSource, OrderStatus, PaymentKind, PaymentStatus, UserRole
+from app.models import Base, Customer, Delivery, Expense, Order, OrderItem, Payment, Product, User
+from app.models.enums import (
+    DeliveryType,
+    ExpenseCategory,
+    OrderSource,
+    OrderStatus,
+    PaymentKind,
+    PaymentStatus,
+    UserRole,
+)
 
 ADMIN_PASSWORD = "admin-password-123"
 OPERATOR_PASSWORD = "operator-password-123"
@@ -203,6 +211,28 @@ def make_product(db: Session) -> Callable[..., Product]:
         db.commit()
         db.refresh(product)
         return product
+
+    return _make
+
+
+@pytest.fixture
+def make_expense(db: Session) -> Callable[..., Expense]:
+    def _make(
+        amount: Decimal | int | float | str = "100.00",
+        expense_date: date | None = None,
+        category: ExpenseCategory = ExpenseCategory.INGREDIENTS,
+        **fields: Any,
+    ) -> Expense:
+        expense = Expense(
+            amount=money(amount),
+            expense_date=expense_date or business_today(),
+            category=category,
+            **fields,
+        )
+        db.add(expense)
+        db.commit()
+        db.refresh(expense)
+        return expense
 
     return _make
 

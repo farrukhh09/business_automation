@@ -13,6 +13,7 @@ import {
   IconReports,
   IconSettings,
   IconStatistics,
+  IconTestChat,
   IconUsers,
   type IconProps,
 } from "@/components/ui/icons";
@@ -39,6 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/reports", label: "Отчёты", icon: IconReports },
   { href: "/faq", label: "FAQ", icon: IconFaq },
   { href: "/conversations", label: "Диалоги", icon: IconConversations },
+  { href: "/test-chat", label: "Тест бота", icon: IconTestChat },
   { href: "/settings", label: "Настройки", icon: IconSettings },
   { href: "/users", label: "Пользователи", icon: IconUsers, roles: ["ADMIN"] },
 ];

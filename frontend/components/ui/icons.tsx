@@ -123,6 +123,15 @@ export const IconConversations = createIcon(
   </>,
 );
 
+export const IconTestChat = createIcon(
+  "IconTestChat",
+  <>
+    <path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1h-9l-5 4v-4H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" />
+    <path d="M12 8v2M9.5 9.5l1.5 1M14.5 9.5 13 10.5" />
+    <circle cx="12" cy="13.5" r="0.75" fill="currentColor" stroke="none" />
+  </>,
+);
+
 export const IconSettings = createIcon(
   "IconSettings",
   <>

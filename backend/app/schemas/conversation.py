@@ -73,6 +73,15 @@ class SendMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=MESSAGE_TEXT_MAX)
 
 
+class TestChatOut(BaseModel):
+    """``/api/test-chat/{key}`` (04-api.md §11a) — a local, no-Instagram conversation with the bot."""
+
+    conversation_id: int | None = None
+    mode: ConversationMode = ConversationMode.AI
+    needs_attention: bool = False
+    messages: list[MessageOut] = Field(default_factory=list)
+
+
 class HandoffIn(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

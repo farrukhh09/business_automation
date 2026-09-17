@@ -13,6 +13,7 @@ import type {
   DeliveryStatus,
   DeliveryType,
   DispatchProvider,
+  ExpenseCategory,
   GeocodeStatus,
   GeoPrecision,
   Intent,
@@ -449,6 +450,28 @@ export const GEO_PRECISION_LABELS: Record<GeoPrecision, string> = {
 /* ------------------------------------------------------------------ */
 /* Statistics / settings                                               */
 /* ------------------------------------------------------------------ */
+
+export const EXPENSE_CATEGORY_LABELS: Record<ExpenseCategory, string> = {
+  INGREDIENTS: "Продукты и ингредиенты",
+  PACKAGING: "Упаковка",
+  DELIVERY: "Доставка",
+  MARKETING: "Реклама",
+  RENT: "Аренда и коммунальные",
+  SALARY: "Зарплата",
+  EQUIPMENT: "Оборудование и инвентарь",
+  OTHER: "Прочее",
+};
+
+export const EXPENSE_CATEGORY_TONES: Record<ExpenseCategory, BadgeTone> = {
+  INGREDIENTS: "orange",
+  PACKAGING: "amber",
+  DELIVERY: "blue",
+  MARKETING: "violet",
+  RENT: "indigo",
+  SALARY: "teal",
+  EQUIPMENT: "green",
+  OTHER: "gray",
+};
 
 export const STATISTICS_PERIOD_LABELS: Record<StatisticsPeriod, string> = {
   today: "Сегодня",

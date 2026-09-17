@@ -11,6 +11,7 @@ from app.api.routes import (
     conversations,
     customers,
     deliveries,
+    expenses,
     faq,
     health,
     media,
@@ -21,6 +22,7 @@ from app.api.routes import (
     reports,
     settings,
     statistics,
+    test_chat,
     users,
     webhooks,
 )
@@ -36,6 +38,7 @@ ROUTE_MODULES = (
     production,
     statistics,
     reports,
+    expenses,
     deliveries,
     faq,
     conversations,
@@ -43,6 +46,7 @@ ROUTE_MODULES = (
     webhooks,
     public,
     media,
+    test_chat,
 )
 
 api_router = APIRouter(prefix="/api", dependencies=[Depends(default_rate_limit)])

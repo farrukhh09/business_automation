@@ -107,6 +107,18 @@ export type DeliveryStatus = (typeof DELIVERY_STATUSES)[number];
 export const DISPATCH_PROVIDERS = ["MAXIM_MANUAL", "MAXIM_API"] as const;
 export type DispatchProvider = (typeof DISPATCH_PROVIDERS)[number];
 
+export const EXPENSE_CATEGORIES = [
+  "INGREDIENTS",
+  "PACKAGING",
+  "DELIVERY",
+  "MARKETING",
+  "RENT",
+  "SALARY",
+  "EQUIPMENT",
+  "OTHER",
+] as const;
+export type ExpenseCategory = (typeof EXPENSE_CATEGORIES)[number];
+
 /* Derived / query-level enums (04-api.md) */
 
 /** `CustomerListItem.customer_type` value. */
@@ -611,11 +623,29 @@ export interface DeliveryStats {
   pickup_orders: number;
 }
 
+export interface ExpenseCategoryTotal {
+  category: ExpenseCategory;
+  amount: Money;
+}
+
+/** Revenue of the period minus expenses dated in the period (03-business-rules.md §4). */
+export interface ProfitAndLossStats {
+  revenue: Money;
+  expenses: Money;
+  /** may be negative */
+  profit: Money;
+  /** profit / revenue × 100, one decimal; `null` without revenue */
+  margin_percent: number | null;
+  /** non-zero categories, largest first */
+  expenses_by_category: ExpenseCategoryTotal[];
+}
+
 export interface StatisticsOut {
   period: StatisticsPeriodInfo;
   finance: FinanceStats;
   customers: CustomerStats;
   delivery: DeliveryStats;
+  profit_and_loss: ProfitAndLossStats;
 }
 
 export interface DashboardOut {
@@ -644,6 +674,42 @@ export interface TimeseriesPoint {
   revenue: Money;
   orders_count: number;
   paid_amount: Money;
+  /** by expense_date, whatever the date basis */
+  expenses: Money;
+  profit: Money;
+}
+
+/* ------------------------------------------------------------------ */
+/* 7a. Expenses                                                        */
+/* ------------------------------------------------------------------ */
+
+export interface ExpenseListParams extends PaginationParams {
+  date_from?: ISODate;
+  date_to?: ISODate;
+  category?: ExpenseCategory;
+}
+
+export interface ExpenseCreate {
+  /** not in the future */
+  expense_date: ISODate;
+  category: ExpenseCategory;
+  /** > 0 */
+  amount: Money;
+  comment?: string | null;
+}
+
+/** Omitted → unchanged; `comment: null` clears it. */
+export type ExpenseUpdate = Partial<ExpenseCreate>;
+
+export interface ExpenseOut {
+  id: number;
+  expense_date: ISODate;
+  category: ExpenseCategory;
+  amount: Money;
+  comment: string | null;
+  created_by_user_id: number | null;
+  created_at: ISODateTime;
+  updated_at: ISODateTime;
 }
 
 /* ------------------------------------------------------------------ */
@@ -955,6 +1021,18 @@ export interface SendMessageRequest {
 
 export interface HandoffRequest {
   reason?: string | null;
+}
+
+/* ------------------------------------------------------------------ */
+/* 11a. Test chat (dev only)                                           */
+/* ------------------------------------------------------------------ */
+
+export interface TestChatOut {
+  conversation_id: number | null;
+  mode: ConversationMode;
+  needs_attention: boolean;
+  /** ascending by time */
+  messages: MessageOut[];
 }
 
 /* ------------------------------------------------------------------ */

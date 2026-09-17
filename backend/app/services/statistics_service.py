@@ -7,7 +7,7 @@ the business timezone.
 Read-only service: it never writes, so it never commits.
 """
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -16,10 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import BadRequestError, ValidationError
 from app.core.time import business_today, to_business
-from app.models.enums import DeliveryType, OrderStatus, PaymentStatus
+from app.models.enums import DeliveryType, ExpenseCategory, OrderStatus, PaymentStatus
 from app.models.order import Order
 from app.repositories.conversations import ConversationRepository
 from app.repositories.customers import CustomerRepository
+from app.repositories.expenses import ExpenseRepository
 from app.repositories.orders import DATE_BASES, OrderRepository
 from app.schemas.order import build_order_list_item
 from app.schemas.statistics import (
@@ -28,7 +29,9 @@ from app.schemas.statistics import (
     CustomerStats,
     DashboardOut,
     DeliveryStats,
+    ExpenseCategoryTotal,
     FinanceStats,
+    ProfitAndLossStats,
     StatisticsOut,
     StatisticsPeriodInfo,
     TimeseriesPoint,
@@ -45,6 +48,7 @@ DASHBOARD_UNPAID_DAYS = 30
 RECENT_ORDERS_LIMIT = 10
 
 MONEY_QUANT = Decimal("0.01")
+PERCENT_QUANT = Decimal("0.1")
 ZERO = Decimal("0.00")
 
 
@@ -169,6 +173,25 @@ def finance_stats(orders: Sequence[Order]) -> FinanceStats:
     )
 
 
+def profit_and_loss(revenue: Decimal, expenses_by_category: Mapping[ExpenseCategory, Decimal]) -> ProfitAndLossStats:
+    """03 §4 "Расходы и прибыль": profit = revenue of the period − expenses dated in the period."""
+    expenses = sum((_money(amount) for amount in expenses_by_category.values()), ZERO)
+    profit = revenue - expenses
+    margin = (profit * 100 / revenue).quantize(PERCENT_QUANT, rounding=ROUND_HALF_UP) if revenue > ZERO else None
+    category_order = list(ExpenseCategory)
+    totals = sorted(
+        ((category, _money(amount)) for category, amount in expenses_by_category.items() if amount > ZERO),
+        key=lambda item: (-item[1], category_order.index(item[0])),
+    )
+    return ProfitAndLossStats(
+        revenue=revenue,
+        expenses=expenses,
+        profit=profit,
+        margin_percent=float(margin) if margin is not None else None,
+        expenses_by_category=[ExpenseCategoryTotal(category=category, amount=amount) for category, amount in totals],
+    )
+
+
 def delivery_stats(orders: Iterable[Order]) -> DeliveryStats:
     """03 §4 "Доставка"."""
     delivery_orders = 0
@@ -219,6 +242,7 @@ class StatisticsService:
         self.orders = OrderRepository(db)
         self.customers = CustomerRepository(db)
         self.conversations = ConversationRepository(db)
+        self.expenses = ExpenseRepository(db)
 
     # ------------------------------------------------------------------ period statistics
 
@@ -238,6 +262,7 @@ class StatisticsService:
         resolved = period if isinstance(period, Period) else resolve_period(period, date_from, date_to, today)
         basis = resolve_date_basis(date_basis)
         orders = self.orders.valid_orders_for_period(resolved.date_from, resolved.date_to, basis)
+        finance = finance_stats(orders)
         return StatisticsOut(
             period=StatisticsPeriodInfo(
                 name=resolved.name,
@@ -245,7 +270,7 @@ class StatisticsService:
                 date_to=resolved.date_to,
                 date_basis=basis,
             ),
-            finance=finance_stats(orders),
+            finance=finance,
             customers=customer_stats(
                 orders,
                 basis,
@@ -253,6 +278,9 @@ class StatisticsService:
                 customers_registered=self.customers.count_registered(resolved.date_from, resolved.date_to),
             ),
             delivery=delivery_stats(orders),
+            profit_and_loss=profit_and_loss(
+                finance.revenue, self.expenses.totals_by_category(resolved.date_from, resolved.date_to)
+            ),
         )
 
     # ------------------------------------------------------------------ dashboard
@@ -309,7 +337,15 @@ class StatisticsService:
             revenue[day] += total
             paid[day] += min(order_paid, total) if order_paid > ZERO else ZERO
             counts[day] += 1
+        expenses = self.expenses.totals_by_day(start, end)
         return [
-            TimeseriesPoint(date=day, revenue=revenue[day], orders_count=counts[day], paid_amount=paid[day])
+            TimeseriesPoint(
+                date=day,
+                revenue=revenue[day],
+                orders_count=counts[day],
+                paid_amount=paid[day],
+                expenses=expenses.get(day, ZERO),
+                profit=revenue[day] - expenses.get(day, ZERO),
+            )
             for day in period.dates()
         ]

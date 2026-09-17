@@ -2,6 +2,33 @@
 
 > Обновлять после каждого этапа. Последнее обновление: 2026-09-17.
 
+**17.09.2026 — расходы и прибыль в «Финансах».** Запрос заказчика сверх SPEC §20 (SPEC не менялся,
+решение записано в контракт). Новая таблица `expenses` (`app/models/expense.py`, `ExpenseCategory`
+в `enums.py`; добавлена в единственную initial-миграцию `0001_initial.py`), CRUD `/api/expenses`
+(`routes/expenses.py` → `ExpenseService` → `ExpenseRepository`; смотреть — STAFF, писать — ADMIN, как
+товары/FAQ; дата расхода не в будущем → 422 `expense_date_in_future`). В статистике — отдельный блок
+`StatisticsOut.profit_and_loss` {revenue, expenses, profit, margin_percent, expenses_by_category}
+(`statistics_service.profit_and_loss`), **не** внутри `FinanceStats`: тот сохраняется в снимках
+ежедневного отчёта, а текст отчёта (SPEC §22) расходов не содержит. `TimeseriesPoint` получил
+`expenses` и `profit`. Расходы всегда считаются по дате расхода, независимо от `date_basis`.
+Фронтенд: страница `finance/page.tsx` переделана (карточки выручка/расходы/прибыль/рентабельность,
+составной график, `components/finance/ExpenseBreakdown.tsx`, `ExpensesSection.tsx` с фильтром и
+пагинацией, `ExpenseFormModal.tsx`). Тесты: `tests/test_expenses.py` (новый), `TestProfitAndLoss` и
+расходы во временном ряду в `test_statistics.py`, контрактные списки в `test_api_contract.py`,
+`test_health.py`, `test_models.py`; фабрика `make_expense` в `conftest.py`. 2166 тестов проходят, `tsc`
+/ `eslint` / `next build` чистые. В рабочую `dev.db` таблица добавлена точечно
+(`Expense.__table__.create`), без пересоздания базы.
+
+**17.09.2026 — «Тест бота» в админке.** Страница `/test-chat` (`components/test-chat/TestChatView.tsx`)
+и API `GET /api/test-chat/{customer_key}`, `POST /api/test-chat/{customer_key}/messages`
+(`routes/test_chat.py` → `services/test_chat_service.py`): сообщение проходит тот же путь, что
+настоящее из Instagram (`InboundMessageService.handle_event`), диалог `webtest:{key}` виден в
+«Диалогах», ответ бота никуда не отправляется (помечается FAILED с пояснением, как у
+`scripts/chat_console.py`). Работает только при `APP_ENV=development`, иначе 404. Для внешнего
+показа админка запускается продакшен-сборкой (`next build` + `node .next/standalone/server.js`,
+статику копировать в `standalone`) и открывается через ngrok (`.tools/ngrok`, не коммитится):
+dev-сервер через туннель грузился бесконечно из-за компиляции модулей на лету.
+
 **17.09.2026 — чёрный список клиентов.** По запросу заказчика (токсичные клиенты: много вопросов,
 торгуются, не хотят предоплату) добавлена ручная блокировка — намеренно **без** автоматического
 AI-детектора (риск забанить обычного осторожного клиента), сотрудник ставит флаг сам в карточке

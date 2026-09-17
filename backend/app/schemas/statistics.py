@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.enums import ExpenseCategory
 from app.schemas.common import Money
 from app.schemas.order import OrderListItem
 
@@ -67,11 +68,32 @@ class DeliveryStats(BaseModel):
     pickup_orders: int
 
 
+class ExpenseCategoryTotal(BaseModel):
+    category: ExpenseCategory
+    amount: Money
+
+
+class ProfitAndLossStats(BaseModel):
+    """03-business-rules.md §4 "Расходы и прибыль". Kept out of ``FinanceStats``: the daily report
+    stores ``FinanceStats`` snapshots and its text (SPEC §22) has no expenses."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    revenue: Money
+    expenses: Money
+    profit: Money
+    #: ``profit / revenue × 100`` rounded to 0.1; ``null`` when there is no revenue.
+    margin_percent: float | None = None
+    #: Categories with a non-zero total, largest first.
+    expenses_by_category: list[ExpenseCategoryTotal] = Field(default_factory=list)
+
+
 class StatisticsOut(BaseModel):
     period: StatisticsPeriodInfo
     finance: FinanceStats
     customers: CustomerStats
     delivery: DeliveryStats
+    profit_and_loss: ProfitAndLossStats
 
 
 class DashboardOut(BaseModel):
@@ -97,3 +119,6 @@ class TimeseriesPoint(BaseModel):
     revenue: Money
     orders_count: int
     paid_amount: Money
+    #: Expenses dated that day (``expense_date``, independent of ``date_basis``).
+    expenses: Money
+    profit: Money

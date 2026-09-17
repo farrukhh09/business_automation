@@ -42,6 +42,10 @@ CONTRACT_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("GET", "/api/reports/daily"),
     ("POST", "/api/reports/daily/generate"),
     ("GET", "/api/reports/daily/history"),
+    ("GET", "/api/expenses"),
+    ("POST", "/api/expenses"),
+    ("PATCH", "/api/expenses/{expense_id}"),
+    ("DELETE", "/api/expenses/{expense_id}"),
     ("GET", "/api/deliveries"),
     ("GET", "/api/deliveries/{delivery_id}"),
     ("PATCH", "/api/deliveries/{delivery_id}"),
@@ -62,6 +66,8 @@ CONTRACT_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/conversations/{conversation_id}/handoff"),
     ("POST", "/api/conversations/{conversation_id}/resume"),
     ("POST", "/api/conversations/{conversation_id}/read"),
+    ("GET", "/api/test-chat/{customer_key}"),
+    ("POST", "/api/test-chat/{customer_key}/messages"),
     ("GET", "/api/settings"),
     ("PUT", "/api/settings"),
     ("GET", "/api/settings/integrations"),
@@ -86,6 +92,9 @@ ADMIN_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("DELETE", "/api/products/{product_id}"),
         ("POST", "/api/orders"),
         ("POST", "/api/reports/daily/generate"),
+        ("POST", "/api/expenses"),
+        ("PATCH", "/api/expenses/{expense_id}"),
+        ("DELETE", "/api/expenses/{expense_id}"),
         ("POST", "/api/faq"),
         ("PATCH", "/api/faq/{faq_id}"),
         ("DELETE", "/api/faq/{faq_id}"),
@@ -125,8 +134,10 @@ BODY_BY_PREFIX: tuple[tuple[str, dict], ...] = (
     ("/api/orders", {"customer_id": 1, "items": [], "delivery_type": "PICKUP", "delivery_date": "2026-01-01", "delivery_time": "10:00"}),
     ("/api/deliveries/{delivery_id}/select-candidate", {"index": 0}),
     ("/api/deliveries/optimize", {"date": "2026-01-01"}),
+    ("/api/expenses", {"expense_date": "2026-01-01", "category": "INGREDIENTS", "amount": 1}),
     ("/api/faq", {"question": "x", "answer": "x"}),
     ("/api/conversations/{conversation_id}/messages", {"text": "x"}),
+    ("/api/test-chat/{customer_key}/messages", {"text": "x"}),
     ("/api/conversations/{conversation_id}/handoff", {"reason": "x"}),
     ("/api/settings", {}),
     ("/api/public/location/{token}", {"latitude": 38.56, "longitude": 68.78}),
@@ -137,10 +148,19 @@ def _fake_id_path(path: str) -> str:
     """Replace every ``{param}`` with a syntactically valid placeholder (404 is an acceptable
     outcome here — only a raw 401/403 vs. "got past auth" distinction matters)."""
     result = path
-    id_params = ("user_id", "customer_id", "product_id", "order_id", "faq_id", "delivery_id", "conversation_id")
+    id_params = (
+        "user_id",
+        "customer_id",
+        "product_id",
+        "order_id",
+        "faq_id",
+        "delivery_id",
+        "conversation_id",
+        "expense_id",
+    )
     for name in id_params:
         result = result.replace(f"{{{name}}}", "1")
-    return result.replace("{token}", "x").replace("{filename}", "x")
+    return result.replace("{token}", "x").replace("{filename}", "x").replace("{customer_key}", "x")
 
 
 def _body_for(path: str) -> dict:

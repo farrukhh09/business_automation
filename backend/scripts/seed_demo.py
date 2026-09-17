@@ -96,7 +96,7 @@ PRODUCTS: list[dict[str, Any]] = [
 ]
 
 BUSINESS_SETTINGS: dict[str, Any] = {
-    "business_name": "Домашняя выпечка",
+    "business_name": "Синнамоны",
     "pickup_address": "Худжанд, улица Ленина, 45 (тестовый адрес)",
     "working_hours": "Ежедневно с 9:00 до 20:00",
     "payment_methods_text": "Наличными при получении или переводом на карту (реквизиты пришлёт менеджер).",

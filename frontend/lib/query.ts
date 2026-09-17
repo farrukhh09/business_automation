@@ -135,6 +135,11 @@ export const queryKeys = {
     dispatchSheetAll: ["deliveries", "dispatch-sheet"] as const,
     dispatchSheet: (date: string) => ["deliveries", "dispatch-sheet", date] as const,
   },
+  /** GET /expenses */
+  expenses: {
+    all: ["expenses"] as const,
+    list: (params: object = {}) => ["expenses", "list", params] as const,
+  },
   /** GET /faq */
   faq: {
     all: ["faq"] as const,
@@ -147,6 +152,11 @@ export const queryKeys = {
     list: (params: object = {}) => ["conversations", "list", params] as const,
     details: ["conversations", "detail"] as const,
     detail: (id: Id, params: object = {}) => ["conversations", "detail", String(id), params] as const,
+  },
+  /** GET /test-chat/{key} (dev only) */
+  testChat: {
+    all: ["test-chat"] as const,
+    detail: (key: string) => ["test-chat", key] as const,
   },
   /** GET /settings, /settings/integrations */
   settings: {

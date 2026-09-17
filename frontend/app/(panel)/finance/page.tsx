@@ -3,9 +3,10 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar,
-  BarChart,
   CartesianGrid,
+  ComposedChart,
   Legend,
+  Line,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,6 +15,8 @@ import {
 } from "recharts";
 import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
+import { ExpenseBreakdown } from "@/components/finance/ExpenseBreakdown";
+import { ExpensesSection } from "@/components/finance/ExpensesSection";
 import { MoneyText, PageSuspense, PeriodPicker, SectionCard, usePeriodParams } from "@/components/shared";
 import { Card, ErrorState, PageHeader, StatCard } from "@/components/ui";
 import { formatDate, formatMoney, formatNumber } from "@/lib/format";
@@ -32,7 +35,8 @@ const VALID_ORDER_STATUSES: OrderStatus[] = [
 ];
 
 const REVENUE_COLOR = "#c2410c";
-const PAID_COLOR = "#059669";
+const EXPENSES_COLOR = "#94a3b8";
+const PROFIT_COLOR = "#059669";
 const GRID_COLOR = "#e2e8f0";
 const AXIS_TICK_COLOR = "#64748b";
 
@@ -42,34 +46,42 @@ function shortDate(value: string): string {
 
 const SERIES_NAMES: Record<string, string> = {
   revenue: "Выручка",
-  paid_amount: "Оплачено",
+  expenses: "Расходы",
+  profit: "Прибыль",
 };
+
+function formatPercent(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${formatNumber(value, 1)} %`;
+}
 
 function FinanceChartTooltip({ active, payload, label }: TooltipContentProps<ValueType, NameType>) {
   if (!active || !payload || payload.length === 0 || typeof label !== "string") return null;
   const point = payload[0]?.payload as TimeseriesPoint | undefined;
   if (!point) return null;
+  const rows: [string, string][] = [
+    ["Выручка", formatMoney(point.revenue)],
+    ["Оплачено", formatMoney(point.paid_amount)],
+    ["Расходы", formatMoney(point.expenses)],
+    ["Прибыль", formatMoney(point.profit)],
+    ["Заказов", formatNumber(point.orders_count, 0)],
+  ];
   return (
     <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs shadow-sm">
       <p className="font-semibold text-slate-700">{formatDate(label)}</p>
-      <p className="mt-1 text-slate-600">
-        Выручка: <span className="font-medium text-slate-900">{formatMoney(point.revenue)}</span>
-      </p>
-      <p className="text-slate-600">
-        Оплачено: <span className="font-medium text-slate-900">{formatMoney(point.paid_amount)}</span>
-      </p>
-      <p className="text-slate-600">
-        Заказов: <span className="font-medium text-slate-900">{formatNumber(point.orders_count, 0)}</span>
-      </p>
+      {rows.map(([name, value], index) => (
+        <p key={name} className={index === 0 ? "mt-1 text-slate-600" : "text-slate-600"}>
+          {name}: <span className="font-medium text-slate-900">{value}</span>
+        </p>
+      ))}
     </div>
   );
 }
 
 function FinanceTrendChart({ data }: { data: readonly TimeseriesPoint[] }) {
   return (
-    <div className="h-64 w-full">
+    <div className="h-72 w-full">
       <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data as TimeseriesPoint[]} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+        <ComposedChart data={data as TimeseriesPoint[]} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid vertical={false} stroke={GRID_COLOR} strokeDasharray="3 3" />
           <XAxis
             dataKey="date"
@@ -92,9 +104,18 @@ function FinanceTrendChart({ data }: { data: readonly TimeseriesPoint[] }) {
             iconType="circle"
             iconSize={8}
           />
-          <Bar dataKey="revenue" name="revenue" fill={REVENUE_COLOR} radius={[4, 4, 0, 0]} maxBarSize={36} />
-          <Bar dataKey="paid_amount" name="paid_amount" fill={PAID_COLOR} radius={[4, 4, 0, 0]} maxBarSize={36} />
-        </BarChart>
+          <Bar dataKey="revenue" name="revenue" fill={REVENUE_COLOR} radius={[4, 4, 0, 0]} maxBarSize={32} />
+          <Bar dataKey="expenses" name="expenses" fill={EXPENSES_COLOR} radius={[4, 4, 0, 0]} maxBarSize={32} />
+          <Line
+            dataKey="profit"
+            name="profit"
+            type="monotone"
+            stroke={PROFIT_COLOR}
+            strokeWidth={2}
+            dot={{ r: 2 }}
+            activeDot={{ r: 4 }}
+          />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   );
@@ -116,11 +137,15 @@ function FinancePageContent() {
   });
 
   const finance = statsQuery.data?.finance;
+  const pnl = statsQuery.data?.profit_and_loss;
   const loading = statsQuery.isLoading;
+  const profit = pnl?.profit ?? 0;
+  const chartData = timeseriesQuery.data ?? [];
+  const chartIsEmpty = chartData.every((point) => point.revenue === 0 && point.expenses === 0);
 
   return (
     <>
-      <PageHeader title="Финансы" description="Выручка, оплаченные и неоплаченные заказы, средний чек" />
+      <PageHeader title="Финансы" description="Выручка, расходы и прибыль, оплаты и средний чек" />
       <div className="flex flex-col gap-6">
         <Card>
           <PeriodPicker value={period.value} onChange={period.setValue} />
@@ -134,30 +159,34 @@ function FinancePageContent() {
           <>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
-                label="Общая выручка"
+                label="Выручка"
                 value={<MoneyText value={finance?.revenue ?? 0} strong />}
                 tone="brand"
                 loading={loading}
               />
-              <StatCard label="Количество заказов" value={formatNumber(finance?.orders_count ?? 0, 0)} loading={loading} />
               <StatCard
-                label="Оплаченные заказы"
-                value={formatNumber(finance?.paid_orders_count ?? 0, 0)}
-                tone="green"
-                loading={loading}
-              />
-              <StatCard
-                label="Частично оплаченные"
-                value={formatNumber(finance?.partially_paid_orders_count ?? 0, 0)}
-                tone="amber"
-                loading={loading}
-              />
-              <StatCard
-                label="Неоплаченные"
-                value={formatNumber(finance?.unpaid_orders_count ?? 0, 0)}
+                label="Расходы"
+                value={<MoneyText value={pnl?.expenses ?? 0} strong />}
                 tone="red"
                 loading={loading}
               />
+              <StatCard
+                label="Прибыль"
+                value={<MoneyText value={profit} strong tone={profit < 0 ? "danger" : "success"} />}
+                hint="Выручка минус расходы"
+                tone={profit < 0 ? "red" : "green"}
+                loading={loading}
+              />
+              <StatCard
+                label="Рентабельность"
+                value={formatPercent(pnl?.margin_percent)}
+                hint="Доля прибыли в выручке"
+                tone="blue"
+                loading={loading}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
                 label="Оплачено"
                 value={<MoneyText value={finance?.paid_amount ?? 0} strong tone="success" />}
@@ -176,26 +205,55 @@ function FinancePageContent() {
                 tone="blue"
                 loading={loading}
               />
+              <StatCard label="Количество заказов" value={formatNumber(finance?.orders_count ?? 0, 0)} loading={loading} />
             </div>
 
-            <SectionCard
-              title="Выручка и оплата по дням"
-              loading={timeseriesQuery.isLoading}
-              error={timeseriesQuery.error}
-              onRetry={() => timeseriesQuery.refetch()}
-              retrying={timeseriesQuery.isFetching}
-              empty={!timeseriesQuery.isLoading && (timeseriesQuery.data?.length ?? 0) === 0}
-              emptyTitle="Нет данных за период"
-            >
-              <FinanceTrendChart data={timeseriesQuery.data ?? []} />
-            </SectionCard>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <StatCard
+                label="Оплаченные заказы"
+                value={formatNumber(finance?.paid_orders_count ?? 0, 0)}
+                tone="green"
+                loading={loading}
+              />
+              <StatCard
+                label="Частично оплаченные"
+                value={formatNumber(finance?.partially_paid_orders_count ?? 0, 0)}
+                tone="amber"
+                loading={loading}
+              />
+              <StatCard
+                label="Неоплаченные"
+                value={formatNumber(finance?.unpaid_orders_count ?? 0, 0)}
+                tone="red"
+                loading={loading}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              <SectionCard
+                title="Выручка, расходы и прибыль по дням"
+                className="lg:col-span-2"
+                loading={timeseriesQuery.isLoading}
+                error={timeseriesQuery.error}
+                onRetry={() => timeseriesQuery.refetch()}
+                retrying={timeseriesQuery.isFetching}
+                empty={!timeseriesQuery.isLoading && chartIsEmpty}
+                emptyTitle="Нет данных за период"
+              >
+                <FinanceTrendChart data={chartData} />
+              </SectionCard>
+              <ExpenseBreakdown pnl={pnl} loading={loading} />
+            </div>
           </>
         )}
 
+        <ExpensesSection key={`${period.range?.date_from}:${period.range?.date_to}`} range={period.range} />
+
         <p className="text-sm text-slate-500">
-          Учитываются заказы в статусах: {VALID_ORDER_STATUSES.map((status) => ORDER_STATUS_LABELS[status]).join(", ")}.
+          Выручка — заказы в статусах: {VALID_ORDER_STATUSES.map((status) => ORDER_STATUS_LABELS[status]).join(", ")};
+          база даты периода: <span className="font-medium text-slate-700">{DATE_BASIS_LABELS[period.value.date_basis]}</span>.
           {" "}
-          База даты периода: <span className="font-medium text-slate-700">{DATE_BASIS_LABELS[period.value.date_basis]}</span>.
+          Расходы учитываются по дате расхода. Прибыль = выручка − расходы.
         </p>
       </div>
     </>

@@ -151,7 +151,7 @@ def test_model_small_talk_is_answered_without_a_failed_attempt(
     outcome = bot.say("как дела?")
 
     assert outcome.reply.kind == ReplyKind.SMALL_TALK and not outcome.handoff
-    assert reply_text(outcome).startswith("Мы небольшая домашняя пекарня")
+    assert reply_text(outcome).startswith("Мы «Синнамоны»")
     db.refresh(bot.conversation)
     assert bot.conversation.failed_ai_attempts == 0
 

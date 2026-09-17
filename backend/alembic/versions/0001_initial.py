@@ -52,6 +52,7 @@ GEOCODE_STATUS = ("PENDING", "OK", "NOT_FOUND", "AMBIGUOUS", "FAILED", "MANUAL")
 LOCATION_SOURCE = ("CUSTOMER_PIN", "GEOCODER", "OPERATOR", "COURIER")
 DELIVERY_STATUS = ("PENDING", "AWAITING_DISPATCH", "DISPATCHED", "DELIVERED", "FAILED", "CANCELLED")
 DISPATCH_PROVIDER = ("MAXIM_MANUAL", "MAXIM_API")
+EXPENSE_CATEGORY = ("INGREDIENTS", "PACKAGING", "DELIVERY", "MARKETING", "RENT", "SALARY", "EQUIPMENT", "OTHER")
 
 TABLES_IN_CREATION_ORDER = (
     "users",
@@ -60,6 +61,7 @@ TABLES_IN_CREATION_ORDER = (
     "faq_items",
     "daily_reports",
     "app_settings",
+    "expenses",
     "refresh_tokens",
     "conversations",
     "messages",
@@ -198,6 +200,27 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("key", name=op.f("pk_app_settings")),
     )
+
+    op.create_table(
+        "expenses",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("expense_date", sa.Date(), nullable=False),
+        sa.Column("category", _enum("category", EXPENSE_CATEGORY), nullable=False),
+        sa.Column("amount", _money(), nullable=False),
+        sa.Column("comment", sa.Text(), nullable=True),
+        sa.Column("created_by_user_id", sa.Integer(), nullable=True),
+        _created_at(),
+        _updated_at(),
+        sa.CheckConstraint("amount > 0", name=op.f("ck_expenses_amount_positive")),
+        sa.ForeignKeyConstraint(
+            ["created_by_user_id"],
+            ["users.id"],
+            name=op.f("fk_expenses_created_by_user_id_users"),
+            ondelete="SET NULL",
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_expenses")),
+    )
+    op.create_index(op.f("ix_expenses_expense_date"), "expenses", ["expense_date"], unique=False)
 
     op.create_table(
         "refresh_tokens",

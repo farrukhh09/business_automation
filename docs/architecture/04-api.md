@@ -89,9 +89,20 @@
 | GET | /statistics | STAFF | query: `period` (`today`/`yesterday`/`week`/`month`/`custom`), `date_from`, `date_to` (для custom), `date_basis` (`delivery` default / `created`) → `StatisticsOut` |
 |---|---|---|---|
 | GET | /statistics/dashboard | STAFF | → `DashboardOut` |
-| GET | /statistics/timeseries | STAFF | query `date_from`, `date_to`, `date_basis` → `[{date, revenue, orders_count, paid_amount}]` |
+| GET | /statistics/timeseries | STAFF | query `date_from`, `date_to`, `date_basis` → `[{date, revenue, orders_count, paid_amount, expenses, profit}]` (расходы — по `expense_date` дня) |
 
-`StatisticsOut = {period: {name, date_from, date_to, date_basis}, finance: {revenue, orders_count, paid_orders_count, partially_paid_orders_count, unpaid_orders_count, paid_amount, unpaid_amount, average_check}, customers: {new_customers, regular_customers, total_customers, new_customer_orders, regular_customer_orders, customers_registered}, delivery: {delivery_orders, pickup_orders}}`
+`StatisticsOut = {period: {name, date_from, date_to, date_basis}, finance: {revenue, orders_count, paid_orders_count, partially_paid_orders_count, unpaid_orders_count, paid_amount, unpaid_amount, average_check}, customers: {new_customers, regular_customers, total_customers, new_customer_orders, regular_customer_orders, customers_registered}, delivery: {delivery_orders, pickup_orders}, profit_and_loss: {revenue, expenses, profit, margin_percent: number|null, expenses_by_category: [{category, amount}]}}` (правила — 03 §4 «Расходы и прибыль»; блок отдельно от `finance`, который сохраняется в снимке ежедневного отчёта)
+
+## 7a. Расходы
+
+| GET | /expenses | STAFF | query `date_from?`, `date_to?` (включительно; `date_from > date_to` → 422), `category?`, `page`, `page_size` → `Page[ExpenseOut]` (сортировка `-expense_date`, `-id`) |
+|---|---|---|---|
+| POST | /expenses | ADMIN | `ExpenseCreate` → 201 `ExpenseOut` (дата в будущем → 422 `expense_date_in_future`) |
+| PATCH | /expenses/{id} | ADMIN | частично `ExpenseCreate` (отсутствует — без изменений, `comment: null` очищает) → `ExpenseOut` |
+| DELETE | /expenses/{id} | ADMIN | → 204 (физическое удаление) |
+
+`ExpenseCreate = {expense_date: date, category: ExpenseCategory, amount: Money (> 0), comment?: string|null (до 2000)}`; неизвестные поля → 422.
+`ExpenseOut = ExpenseCreate + {id, created_by_user_id, created_at, updated_at}`
 `DashboardOut = {date, orders_today, revenue_today, unpaid_orders_count (все valid-заказы с оплатой ≠ PAID и delivery_date ≥ сегодня−30д), new_customers_today, regular_customers_today, delivery_orders_today, pickup_orders_today, waiting_confirmation_count, conversations_needing_attention, recent_orders: OrderListItem[] (10)}` — «сегодня» по `delivery_date`.
 
 ## 8. Reports
@@ -145,6 +156,22 @@
 `ConversationDetail = ConversationListItem + {messages: MessageOut[] (по возрастанию времени), state_summary: {draft_order_id, awaiting: string|null, language}}`
 `active_order_id` — последний оформленный и не завершённый заказ клиента (CONFIRMED…HANDED_TO_COURIER; черновик — в `state_summary.draft_order_id`). `last_message_preview` — до 120 символов; голосовое без текста — «[голосовое сообщение]», изображение — «[изображение]». `state_summary.draft_order_id` = null, если черновик уже подтверждён/отменён из админки. `audio_url`/`media_url` — относительные ссылки `/api/media/{filename}`.
 `MessageOut = {id, direction, message_type, sender, text, audio_url, media_url, intent, delivery_status, error, sent_by_user_id, created_at}`
+
+## 11a. Тестовый чат (только `APP_ENV=development`)
+
+Разговор с ботом прямо из админки, без Instagram — то же самое, что консольный скрипт
+`scripts/chat_console.py`, но через HTTP. `customer_key` придумывает фронтенд (случайная строка,
+хранится в `localStorage`; новый ключ = новый тестовый клиент/диалог, как `--new` у консольного
+скрипта). Диалог — обычная запись в `conversations` (`instagram_conversation_id = "webtest:{key}"`),
+поэтому виден в разделе «Диалоги» как любой другой; исходящие ответы бота помечаются `FAILED` с
+пояснением «не отправлялся, показан только в интерфейсе» — никуда реально не уходят. Вне
+`APP_ENV=development` оба маршрута отвечают 404 (не просто прячутся из меню).
+
+| GET | /test-chat/{customer_key} | STAFF | → `TestChatOut` (пустой, если ещё не было сообщений) |
+|---|---|---|---|
+| POST | /test-chat/{customer_key}/messages | STAFF | `{text}` (1..2000) → `TestChatOut`, сообщение проходит весь путь `DialogService`, как настоящее от клиента |
+
+`TestChatOut = {conversation_id: int|null, mode, needs_attention, messages: MessageOut[]}`
 
 ## 12. Settings
 

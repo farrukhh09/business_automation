@@ -19,6 +19,7 @@ from app.models import (
     Customer,
     DailyReport,
     Delivery,
+    Expense,
     FaqItem,
     LocationRequest,
     Message,
@@ -36,6 +37,7 @@ from app.models.enums import (
     ActorType,
     ConversationMode,
     DeliveryStatus,
+    ExpenseCategory,
     GeocodeStatus,
     Language,
     MessageDeliveryStatus,
@@ -68,6 +70,7 @@ EXPECTED_TABLES = {
     "faq_items",
     "app_settings",
     "daily_reports",
+    "expenses",
 }
 
 ALL_MODELS = (
@@ -88,6 +91,7 @@ ALL_MODELS = (
     FaqItem,
     AppSetting,
     DailyReport,
+    Expense,
 )
 
 
@@ -154,8 +158,14 @@ def test_create_every_model_with_defaults(db: Session, admin_user: User) -> None
     setting = AppSetting(key="business", value={"business_name": "Домашняя выпечка"}, updated_by_user_id=admin_user.id)
     report = DailyReport(report_date=date(2026, 9, 15), data={"finance": {"revenue": 0}}, text="ОТЧЁТ ЗА 15.09.2026")
     refresh = RefreshToken(user=admin_user, jti="jti-1", expires_at=now_utc() + timedelta(days=14))
+    expense = Expense(
+        expense_date=date(2026, 9, 15),
+        category=ExpenseCategory.INGREDIENTS,
+        amount=Decimal("250.00"),
+        created_by_user_id=admin_user.id,
+    )
 
-    db.add_all([order, location_request, plan, message, faq, setting, report, refresh])
+    db.add_all([order, location_request, plan, message, faq, setting, report, refresh, expense])
     db.commit()
     db.expire_all()
 

@@ -140,12 +140,24 @@ class DispatchProvider(StrEnum):
     MAXIM_API = "MAXIM_API"
 
 
+class ExpenseCategory(StrEnum):
+    INGREDIENTS = "INGREDIENTS"
+    PACKAGING = "PACKAGING"
+    DELIVERY = "DELIVERY"
+    MARKETING = "MARKETING"
+    RENT = "RENT"
+    SALARY = "SALARY"
+    EQUIPMENT = "EQUIPMENT"
+    OTHER = "OTHER"
+
+
 __all__ = [
     "ActorType",
     "ConversationMode",
     "DeliveryStatus",
     "DeliveryType",
     "DispatchProvider",
+    "ExpenseCategory",
     "GeocodeStatus",
     "Intent",
     "Language",
