@@ -87,6 +87,29 @@ def test_apply_replace_drops_positions_not_in_the_new_set(make_product) -> None:
     assert [item.product_id for item in order.items] == [second.id]
 
 
+def test_apply_set_changes_only_the_named_product(make_product) -> None:
+    """ "Шоколадных не 2, а 3": the position takes the new quantity, other products stay."""
+    chocolate = make_product("Шоколадные", price="100.00")
+    classic = make_product("Классические", price="100.00")
+    order = Order(items=[], total_amount=Decimal("0.00"))
+    products = {chocolate.id: chocolate, classic.id: classic}
+    OrderPricing.apply(order, [ItemSpec(chocolate.id, 2), ItemSpec(classic.id, 3)], products, mode="add")
+    chocolate.price = Decimal("120.00")  # the snapshot of the existing position must survive
+
+    assert OrderPricing.apply(order, [ItemSpec(chocolate.id, 3)], products, mode="set")
+
+    lines = sorted((item.product_name, item.quantity) for item in order.items)
+    assert lines == [("Классические", 3), ("Шоколадные", 3)]
+    assert next(item for item in order.items if item.product_id == chocolate.id).unit_price == Decimal("100.00")
+    assert order.total_amount == Decimal("600.00")
+
+    # a product not in the order yet is added; 0 removes one
+    other = make_product("Ягодные", price="100.00")
+    specs = [ItemSpec(other.id, 1), ItemSpec(classic.id, 0)]
+    OrderPricing.apply(order, specs, {**products, other.id: other}, mode="set")
+    assert sorted((item.product_name, item.quantity) for item in order.items) == [("Шоколадные", 3), ("Ягодные", 1)]
+
+
 def test_apply_remove_partial_quantity(make_product) -> None:
     product = make_product("Круассан", price="15.00")
     order = Order(items=[], total_amount=Decimal("0.00"))

@@ -161,7 +161,10 @@ def test_spec_order_scenario_from_greeting_to_confirmation(
 
     first = bot.say("Здравствуйте, хочу 2 торта")
     assert first.reply.kind == ReplyKind.ASK_MISSING
-    assert reply_text(first) == "Подскажите, пожалуйста, какие именно? Сейчас есть: Красный бархат, Медовик."
+    # the greeting is answered in kind before the question (17.09.2026)
+    assert reply_text(first) == (
+        "Здравствуйте! Подскажите, пожалуйста, какие именно? Сейчас есть: Красный бархат, Медовик."
+    )
     order = bot.draft()
     assert order.status == OrderStatus.NEW and order.items == [] and order.delivery_date == DAY
     assert bot.state.pending_items[0]["kind"] == "generic" and bot.state.pending_items[0]["quantity"] == 2
@@ -696,7 +699,7 @@ def test_faq_is_answered_whatever_intent_the_model_chose(
     assert reply_text(bot.say("А у вас всё свежие продукты?")) == "Печём в день выдачи."
     db.refresh(bot.conversation)
     assert bot.conversation.failed_ai_attempts == 0
-    assert reply_text(bot.say("Здравствуйте, выпечка свежая?")) == "Печём в день выдачи."
+    assert reply_text(bot.say("Здравствуйте, выпечка свежая?")) == "Здравствуйте! Печём в день выдачи."
     assert reply_text(bot.say("Эклер свежие?")) == "Эклер — 50 сомони / шт."
 
 
@@ -818,7 +821,7 @@ def test_tajik_customer_gets_tajik_templates(
 
     ask = bot.say(text)
 
-    assert reply_text(ask) == "Чанд дона лозим аст: Медовик?"
+    assert reply_text(ask) == "Салом! Чанд дона лозим аст: Медовик?"
     db.refresh(conversation.customer)
     assert conversation.customer.language.value == "tg"
     next_question = bot.say("1")

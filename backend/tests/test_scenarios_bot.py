@@ -9,6 +9,7 @@ Deterministic: ``ScriptedLLM`` and ``FakeGeocoder`` only.
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import pytest
 from sqlalchemy.orm import Session
@@ -20,10 +21,14 @@ from app.integrations.maps.address import candidate_matches, geocode_queries, pa
 from app.integrations.maps.types import GeoCandidate, GeocodeResult, failed_result, rank_candidates
 from app.models.conversation import Conversation
 from app.models.enums import ConversationMode, DeliveryType, GeocodeStatus, Language, OrderStatus
+from app.models.faq import FaqItem
+from app.models.order import Order
 from app.models.product import Product
-from app.services.dialog_state import AWAITING_MISSING_FIELDS
+from app.services.dialog_service import ABANDON_REASON, DRAFT_ABANDON_HOURS
+from app.services.dialog_state import AWAITING_CONFIRMATION, AWAITING_MISSING_FIELDS
 from app.services.geocoding_service import GeocodingService
 from app.services.location_service import LocationService
+from app.services.settings_service import SettingsService
 from tests.bot_fakes import (
     CITY_LAT,
     CITY_LNG,
@@ -349,7 +354,8 @@ def test_kinds_named_without_numbers_after_a_total_are_asked_how_many(
     outcome = bot.say(text)
 
     assert [entry["kind"] for entry in bot.state.pending_items] == ["quantity", "quantity"]
-    assert reply_text(outcome) == "Сколько штук нужно: Ягодные синнамоны, Фисташковые синнамоны?"
+    # products sold by the box are asked "сколько коробочек?", not "сколько штук?"
+    assert reply_text(outcome) == "Сколько коробочек нужно: Ягодные синнамоны, Фисташковые синнамоны?"
 
 
 def test_a_count_after_the_kinds_is_more_to_choose_and_eto_vsyo_ends_it(
@@ -804,3 +810,291 @@ def test_a_tajik_customer_naming_products_stays_in_tajik(
 
     assert second.reply.language == "tg"
     assert reply_text(second).startswith("Лутфан, аниқ кунед:")
+
+
+# --------------------------------------------------------------------------- review of 17.09.2026
+
+
+def test_a_quantity_correction_changes_only_that_product(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """ "Ягодных не 2, а 3" is items_mode "set": the other positions stay (neither doubled nor dropped)."""
+    berry, classic = boxes["berry"], boxes["classic"]
+    llm = ScriptedLLM(
+        {
+            "2 ягодных и 3 классических": understanding(
+                intent="CREATE_ORDER",
+                entities={"items": [item("ягодных", 2, berry.id), item("классических", 3, classic.id)]},
+            ),
+            "нет, ягодных 3": understanding(
+                intent="CHANGE_ORDER", entities={"items": [item("ягодных", 3, berry.id)], "items_mode": "set"}
+            ),
+            "и ещё 1 ягодную": understanding(
+                intent="CHANGE_ORDER", entities={"items": [item("ягодную", 1, berry.id)], "items_mode": "add"}
+            ),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    bot.say("2 ягодных и 3 классических")
+
+    bot.say("нет, ягодных 3")
+    assert _items_of(bot) == [("Классические синнамоны", 3), ("Ягодные синнамоны", 3)]
+
+    bot.say("и ещё 1 ягодную")
+    assert _items_of(bot) == [("Классические синнамоны", 3), ("Ягодные синнамоны", 4)]
+
+
+def test_set_mode_answering_a_choice_still_adds(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """The answer to "какие ещё 2?" adds to the order even when the model tagged it "set"."""
+    classic = boxes["classic"]
+    llm = ScriptedLLM(
+        {
+            "1 классику": understanding(intent="CREATE_ORDER", entities={"items": [item("классику", 1, classic.id)]}),
+            "и ещё 2 синнамона": understanding(intent="CHANGE_ORDER", entities={"items": [item("синнамона", 2)]}),
+            "классические": understanding(
+                intent="CHANGE_ORDER",
+                entities={"items": [item("классические", None, classic.id)], "items_mode": "set"},
+            ),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    bot.say("1 классику")
+    bot.say("и ещё 2 синнамона")
+    assert bot.state.pending_items[0]["kind"] == "generic"
+
+    bot.say("классические")
+
+    assert _items_of(bot) == [("Классические синнамоны", 3)]
+    assert bot.state.pending_items == []
+
+
+@pytest.mark.usefixtures("pickup_settings")
+def test_a_question_asked_together_with_order_data_is_answered_first(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """ "2 медовика на завтра — а доставка есть?": the question is not dropped for the next question."""
+    honey = catalog["honey"]
+    SettingsService(db).update({"delivery_info_text": "Доставка по городу — 20 сомони."})
+    fresh = FaqItem(question="Насколько свежая выпечка?", answer="Печём в день выдачи.", keywords=["свежие"])
+    db.add(fresh)
+    db.commit()
+    llm = ScriptedLLM(
+        {
+            "2 медовика на завтра, а доставка есть?": understanding(
+                intent="CREATE_ORDER",
+                secondary_intents=["DELIVERY_QUERY"],
+                entities={"items": [item("медовик", 2, honey.id)], "delivery_date": DAY.isoformat()},
+            ),
+            "к 18:00, а картой можно?": understanding(
+                intent="CREATE_ORDER",
+                secondary_intents=["PAYMENT_QUERY"],
+                entities={"delivery_time": "18:00"},
+            ),
+            "самовывоз, 92 780 91 52, а выпечка свежая?": understanding(
+                intent="CREATE_ORDER",
+                secondary_intents=["FAQ"],
+                faq_ids=[fresh.id],
+                entities={"delivery_type": "PICKUP", "phone": "92 780 91 52"},
+            ),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    first = bot.say("2 медовика на завтра, а доставка есть?")
+    assert reply_text(first) == (
+        "Доставка по городу — 20 сомони.\n\n"
+        "Самовывоз: ул. Айни, 12\n\n"
+        "Уточните, пожалуйста:\n1. К какому времени?\n2. Это будет доставка или самовывоз?"
+    )
+    db.refresh(bot.conversation)
+    assert not bot.conversation.needs_attention
+
+    # no payment methods in the settings: the manager is alerted, the order still goes on
+    second = bot.say("к 18:00, а картой можно?")
+    assert reply_text(second) == (
+        "Мне нужно уточнить эту информацию у менеджера.\n\n"
+        "Уточните, пожалуйста:\n"
+        "1. Это будет доставка или самовывоз?\n"
+        "2. Напишите, пожалуйста, номер телефона для связи."
+    )
+    db.refresh(bot.conversation)
+    assert bot.conversation.needs_attention and bot.conversation.mode == ConversationMode.AI
+
+    summary = bot.say("самовывоз, 92 780 91 52, а выпечка свежая?")
+    assert summary.reply.kind == ReplyKind.ORDER_SUMMARY
+    assert reply_text(summary).startswith("Печём в день выдачи.\n\nПроверьте, пожалуйста, заказ:\n\nМедовик — 2 шт.")
+
+
+def test_a_refused_slot_replaces_the_stored_one(
+    db: Session,
+    catalog: dict[str, Product],
+    make_conversation: Callable[..., Conversation],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A complete order moved to an hour or a day we cannot take: the old slot is not silently kept."""
+    moment = datetime(2026, 9, 17, 11, 12, tzinfo=UTC)  # 16:12 in Khujand; the earliest slot is 18.09 17:00
+    monkeypatch.setattr(app_time, "now_utc", lambda: moment)
+    monkeypatch.setattr("app.services.order_validator.now_utc", lambda: moment)
+    llm = ScriptedLLM(
+        {
+            "Медовик": understanding(
+                intent="CREATE_ORDER",
+                entities={
+                    "items": [item("медовик", 1, catalog["honey"].id)],
+                    "delivery_date": "2026-09-19",
+                    "delivery_time": "12:00",
+                    "delivery_type": "PICKUP",
+                    "phone": "927809152",
+                },
+            ),
+            "лучше 18 сентября к 12:00": understanding(
+                intent="CHANGE_ORDER", entities={"delivery_date": "2026-09-18", "delivery_time": "12:00"}
+            ),
+            "к 18:00": understanding(intent="CHANGE_ORDER", entities={"delivery_time": "18:00"}),
+            "нет, сегодня к 20:00": understanding(
+                intent="CHANGE_ORDER", entities={"delivery_date": "2026-09-17", "delivery_time": "20:00"}
+            ),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    assert bot.say("Медовик").reply.kind == ReplyKind.ORDER_SUMMARY
+
+    too_early = bot.say("лучше 18 сентября к 12:00")
+    order = bot.draft()
+    assert (order.delivery_date, order.delivery_time) == (date(2026, 9, 18), None)
+    assert reply_text(too_early) == "На завтра можем не раньше 17:00.\nК какому времени?"
+
+    assert bot.say("к 18:00").reply.kind == ReplyKind.ORDER_SUMMARY
+    assert bot.state.awaiting == AWAITING_CONFIRMATION
+
+    refused_day = bot.say("нет, сегодня к 20:00")
+    order = bot.draft()
+    assert (order.delivery_date, order.delivery_time) == (None, None)
+    assert reply_text(refused_day) == (
+        "Заказы принимаем не позднее чем за 24 ч. Самое раннее — завтра после 17:00. "
+        "Выберите, пожалуйста, другую дату или время.\n"
+        "Уточните, пожалуйста:\n1. На какую дату нужен заказ?\n2. К какому времени?"
+    )
+
+
+def test_a_greeting_inside_a_question_is_answered_back_by_the_model_too(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    fresh = FaqItem(question="Насколько свежая выпечка?", answer="Печём в день выдачи.", keywords=["свежие"])
+    db.add(fresh)
+    db.commit()
+    prompts: list[str] = []
+
+    def word(call: dict[str, Any]) -> str:
+        prompts.append(call["prompt"])
+        return "Добрый день! Печём в день выдачи."
+
+    llm = ScriptedLLM({"Добрый день, выпечка свежая?": understanding(intent="FAQ", faq_ids=[fresh.id])}, reply=word)
+    bot = Bot(db, make_conversation(), llm)
+
+    outcome = bot.say("Добрый день, выпечка свежая?")
+
+    assert outcome.reply.source.value == "llm" and reply_text(outcome) == "Добрый день! Печём в день выдачи."
+    assert '"greeting": "day"' in prompts[0]  # the model is told which greeting to return
+    # the template fallback greets back as well
+    assert bot.service.llm is llm
+    llm.reply = None
+    assert reply_text(bot.say("Добрый день, выпечка свежая?")) == "Добрый день! Печём в день выдачи."
+
+
+def test_boxes_answer_the_how_many_question(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    classic, berry = boxes["classic"], boxes["berry"]
+    llm = ScriptedLLM(
+        {
+            "Хочу классические": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("классические", None, classic.id)]}
+            ),
+            "Хочу ягодные": understanding(intent="CREATE_ORDER", entities={"items": [item("ягодные", None, berry.id)]}),
+            "две коробки": understanding(intent="CREATE_ORDER", entities={"items": [item("коробки", 2)]}),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    assert reply_text(bot.say("Хочу классические")) == "Сколько коробочек нужно: Классические синнамоны?"
+    calls = len(llm.json_calls)
+
+    bot.say("2 коробки")  # a bare number with the unit: no model call
+
+    assert len(llm.json_calls) == calls
+    assert _items_of(bot) == [("Классические синнамоны", 2)] and bot.state.pending_items == []
+
+    bot.say("Хочу ягодные")
+    bot.say("две коробки")  # through the model: a counted category word answers the open quantity
+
+    assert _items_of(bot) == [("Классические синнамоны", 2), ("Ягодные синнамоны", 2)]
+    assert bot.state.pending_items == []
+
+
+def test_a_stale_draft_is_abandoned_when_a_new_order_starts(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """ "2 классических" written days ago are not merged into today's "3 ягодных"."""
+    classic, berry = boxes["classic"], boxes["berry"]
+    llm = ScriptedLLM(
+        {
+            "2 классических": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("классических", 2, classic.id)]}
+            ),
+            "3 ягодных": understanding(intent="CREATE_ORDER", entities={"items": [item("ягодных", 3, berry.id)]}),
+            "на завтра": understanding(intent="CHANGE_ORDER", entities={"delivery_date": DAY.isoformat()}),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    bot.say("2 классических")
+    old = bot.draft()
+    old.updated_at = app_time.now_utc() - timedelta(hours=DRAFT_ABANDON_HOURS + 1)
+    db.commit()
+
+    bot.say("на завтра")  # a field alone continues the old draft
+    assert bot.state.draft_order_id == old.id
+
+    old.updated_at = app_time.now_utc() - timedelta(hours=DRAFT_ABANDON_HOURS + 1)
+    db.commit()
+    outcome = bot.say("3 ягодных")
+
+    assert "draft_abandoned" in outcome.actions and bot.state.draft_order_id != old.id
+    assert _items_of(bot) == [("Ягодные синнамоны", 3)]
+    db.refresh(old)
+    assert old.status == OrderStatus.CANCELLED and old.cancel_reason == ABANDON_REASON
+    assert db.get(Order, bot.state.draft_order_id).status == OrderStatus.NEW
+
+
+def test_recipient_is_defaulted_on_every_path_to_the_summary(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """The name arrives from staff (the admin panel) between two messages; "ок" must reach the summary,
+    not crash on ``order_incomplete`` because the recipient was never defaulted."""
+    text = "Медовик, доставка на улицу Рудаки 45"
+    llm = ScriptedLLM(
+        {
+            text: understanding(
+                intent="CREATE_ORDER",
+                entities={
+                    "items": [item("медовик", 1, catalog["honey"].id)],
+                    "delivery_date": DAY.isoformat(),
+                    "delivery_time": "17:00",
+                    "delivery_type": "DELIVERY",
+                    "phone": "901234567",
+                    "address": "улица Рудаки 45",
+                },
+            )
+        }
+    )
+    conversation = make_conversation(name="")  # the Instagram profile gave no name
+    bot = Bot(db, conversation, llm)
+    assert reply_text(bot.say(text)) == "Как к вам можно обращаться?"
+
+    conversation.customer.name = "Алия"
+    db.commit()
+    outcome = bot.say("ок")
+
+    assert outcome.reply.kind == ReplyKind.ORDER_SUMMARY and not outcome.handoff
+    assert bot.draft().delivery.recipient_name == "Алия"

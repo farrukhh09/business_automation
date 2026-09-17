@@ -64,6 +64,7 @@ class ItemsMode(StrEnum):
     ADD = "add"
     REPLACE = "replace"
     REMOVE = "remove"
+    SET = "set"  # "шоколадных не 2, а 3": these products get exactly these quantities, the rest stays
     NONE = "none"
 
 

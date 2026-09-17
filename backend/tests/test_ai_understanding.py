@@ -214,6 +214,7 @@ def test_schema_matches_the_pydantic_models() -> None:
         "add",
         "replace",
         "remove",
+        "set",
         "none",
     ]
 

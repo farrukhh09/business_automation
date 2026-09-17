@@ -132,7 +132,7 @@ def test_spec_49_readiness_scenario(
 
     # 1–5. The customer writes; the system receives the message, identifies the customer and answers.
     answer = user.says("Здравствуйте, хочу 2 торта")
-    assert answer == "Подскажите, пожалуйста, какие именно? Сейчас есть: Красный бархат, Медовик."
+    assert answer == "Здравствуйте! Подскажите, пожалуйста, какие именно? Сейчас есть: Красный бархат, Медовик."
     customer = db.scalars(select(Customer)).one()
     assert customer.instagram_user_id == CUSTOMER_IGSID and customer.name == "Алия Каримова"
     # 9. The draft exists from the first ordering message.
@@ -224,7 +224,7 @@ def test_spec_49_readiness_scenario(
 
     # 5. The same customer now writes in Tajik and gets Tajik answers.
     tajik_summary = user.says("Салом! Боз як медовик мехоҳам, пасфардо соати 12, худам мегирам")
-    assert tajik_summary.startswith("Лутфан, фармоишро санҷед:\n\nМедовик — 1 дона")
+    assert tajik_summary.startswith("Салом! Лутфан, фармоишро санҷед:\n\nМедовик — 1 дона")
     assert tajik_summary.endswith("Ҳама дуруст? Барои тасдиқ «Ҳа» нависед.")
     tajik_confirmation = user.says("Ҳа")
     second = db.scalars(select(Order).where(Order.id != order.id)).one()

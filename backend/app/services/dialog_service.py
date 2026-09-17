@@ -67,7 +67,7 @@ from app.ai.understanding import (
 from app.core.config import Settings, get_settings
 from app.core.exceptions import BusinessRuleError, IntegrationNotConfiguredError
 from app.core.logging import get_logger, log_event
-from app.core.time import business_now, business_today
+from app.core.time import business_now, business_today, ensure_utc, now_utc
 from app.integrations.maps.types import PRECISION_HOUSE, Geocoder
 from app.models.conversation import Conversation, Message
 from app.models.customer import Customer
@@ -147,7 +147,16 @@ CANCEL_REQUEST_TEXT = "отменить заказ. Сообщение клие�
 #: Structured parts of a delivery address, parsed from the customer's text (06 §2).
 ADDRESS_PART_FIELDS = ("district", "microdistrict", "street", "house", "apartment", "entrance", "floor", "landmark")
 
-_BARE_NUMBER_RE = re.compile(r"^\s*(\d{1,3})\s*(?:шт\.?|штук[аи]?|дона|pcs)?\s*[.!]?\s*$", re.IGNORECASE)
+#: A draft nobody touched for this long is finished business: new items start a new order instead of
+#: being merged into it ("2 коробки" written last week are not part of today's "3 классических").
+DRAFT_ABANDON_HOURS = 48
+ABANDON_REASON = "Черновик не завершён клиентом — начат новый заказ"
+#: Facts of a question asked together with order data ("а доставка платная?"), answered in the same reply.
+ANSWERS_FACT = "answers"
+
+_BARE_NUMBER_RE = re.compile(
+    r"^\s*(\d{1,3})\s*(?:шт\.?|штук[аи]?|дона|pcs|кор\.?|коробк[а-я]*|қуттӣ|куттӣ)?\s*[.!]?\s*$", re.IGNORECASE
+)
 
 #: Intents that ask something and must be answered, even when the message carries order data.
 QUERY_INTENTS = frozenset(
@@ -717,6 +726,9 @@ class DialogService:
     def _order_flow(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
         state = turn.state
         order = self._draft(turn)
+        if order is not None and _brings_items(result.entities) and _is_abandoned(order):
+            self._abandon_draft(turn, order)
+            order = None
         if order is None:
             placed = self.orders.latest_active_for_customer(turn.customer.id, IN_PROGRESS_ORDER_STATUSES)
             if placed is not None and result.intent == Intent.CHANGE_ORDER:
@@ -731,11 +743,21 @@ class DialogService:
         address_changed = self._apply_fields(turn, order, result.entities)
         if _asks_price(result):
             self._note_prices(turn, order, result)
+        self._note_answers(turn, result, language)
         if address_changed:
             outcome = self._geocode(turn, order, language)
             if outcome is not None:
                 return outcome
         return self._continue_order(turn, order, language)
+
+    def _abandon_draft(self, turn: _Turn, order: Order) -> None:
+        """The customer starts ordering again after ``DRAFT_ABANDON_HOURS`` of silence: the old draft is
+        cancelled (visible in the journal), not merged with the new items."""
+        self.order_service.cancel(order, reason=ABANDON_REASON, actor_type=ActorType.SYSTEM)
+        turn.state.forget_draft()
+        turn.draft, turn.draft_loaded = None, True
+        turn.actions.append("draft_abandoned")
+        log_event(logger, "dialog.draft_abandoned", conversation_id=turn.conversation.id, order_id=order.id)
 
     # ------------------------------------------------------------------ items
 
@@ -748,6 +770,7 @@ class DialogService:
         by_id = {product.id: product for product in products}
         matcher = ProductMatcher(products)
         mode = entities.items_mode
+        quantity_answer = _quantity_answer(state, mentions, matcher)
 
         resolved: list[dict[str, Any]] = []
         new_pending: list[dict[str, Any]] = []
@@ -755,6 +778,8 @@ class DialogService:
         for position, mention in enumerate(mentions):
             product = by_id.get(mention.product_id) if mention.product_id is not None else None
             text = mention.product_text or (product.name if product is not None else "")
+            if product is None and quantity_answer is not None:
+                product = by_id.get(quantity_answer)  # "2 коробки" answers "Сколько коробочек: Шоколадные?"
             if product is None:
                 match = matcher.match(text)
                 if match.product_id is not None:
@@ -806,6 +831,8 @@ class DialogService:
             entry for entry in state.pending_items if entry["kind"] in (PENDING_GENERIC, PENDING_AMBIGUOUS)
         ]
         if choice_pending and resolved:
+            if mode == ItemsMode.SET:
+                mode = ItemsMode.ADD  # an answer to "какие именно?" adds to the order, whatever the model called it
             _distribute_quantities(choice_pending, resolved)
             state.pending_items = [entry for entry in state.pending_items if entry not in choice_pending]
         if mode == ItemsMode.REPLACE:
@@ -848,7 +875,8 @@ class DialogService:
             if entry["quantity"] is not None
         ]
         if ready or (mode == ItemsMode.REPLACE and resolved):
-            self._write_items(turn, order, ready, "replace" if mode == ItemsMode.REPLACE else "add")
+            write_mode = mode.value if mode in (ItemsMode.REPLACE, ItemsMode.SET) else ItemsMode.ADD.value
+            self._write_items(turn, order, ready, write_mode)
 
     def _write_items(self, turn: _Turn, order: Order, specs: list[dict[str, Any]], mode: str) -> None:
         try:
@@ -932,11 +960,18 @@ class DialogService:
         if problems:
             self._note_timing(turn, problems[0], candidate_date)
             day_is_possible = not OrderValidator.slot_problems(candidate_date, None, turn.business)
-            if problems == [TOO_SOON] and new_time is not None and day_is_possible:
+            keeps_date = problems == [TOO_SOON] and new_time is not None and day_is_possible
+            if keeps_date:
                 # "18 сентября к 16:00" when 17:00 is the earliest: the day stays, only the hour is asked again.
                 turn.notes["timing_keeps_date"] = True
                 if new_date is not None:
-                    changes["delivery_date"] = new_date
+                    changes[DELIVERY_DATE] = new_date
+            elif new_date is not None and order.delivery_date is not None:
+                # The customer moved the order to a day we refused: the old day is not wanted any more
+                # either — cleared, so the date is asked again instead of silently kept in the summary.
+                changes[DELIVERY_DATE] = None
+            if new_time is not None and order.delivery_time is not None:
+                changes[DELIVERY_TIME] = None  # same for an hour that replaced the stored one
             return
         if new_date is not None:
             changes["delivery_date"] = new_date
@@ -971,6 +1006,32 @@ class DialogService:
         if (delivery.recipient_name or "").strip():
             return
         turn.tools.update_order_draft(order, delivery={"recipient_name": name})
+
+    def _note_answers(self, turn: _Turn, result: UnderstandingResult, language: str) -> None:
+        """ "Хочу 2 коробки на завтра — а доставка платная?": a question asked together with order data is
+        answered in the same reply (facts ``answers``: FAQ entries chosen by the model, delivery or
+        payment settings) instead of being dropped for the next question. No data → the manager is
+        alerted (SPEC §40) and the reply says so; the order goes on either way."""
+        intents = set(result.all_intents)
+        asked_faq = self._faq_items(result, turn.text, keywords=Intent.FAQ in intents)
+        if not asked_faq and not intents & {Intent.FAQ, Intent.DELIVERY_QUERY, Intent.PAYMENT_QUERY}:
+            return
+        answers: dict[str, Any] = {}
+        if asked_faq:
+            answers["faq"] = [_faq_fact(item, language) for item in asked_faq]
+        business = turn.business
+        if Intent.DELIVERY_QUERY in intents:
+            answers["delivery_info"] = business.delivery_info_text.strip() or None
+            answers["pickup_address"] = business.pickup_address.strip() or None
+            answers["working_hours"] = business.working_hours.strip() or None
+        if Intent.PAYMENT_QUERY in intents:
+            answers["payment_methods"] = business.payment_methods_text.strip() or None
+        answers = {key: value for key, value in answers.items() if value}
+        if not answers:
+            answers = {"need_manager": True}
+            turn.conversation.needs_attention = True
+            turn.actions.append("needs_manager")
+        turn.notes[ANSWERS_FACT] = answers
 
     def _note_timing(self, turn: _Turn, problem: str, problem_date: date | None = None) -> None:
         turn.notes["timing_problem"] = problem
@@ -1018,6 +1079,7 @@ class DialogService:
             "link": self._location_link(delivery) if delivery is not None else None,
             "status": delivery.geocode_status.value if delivery is not None else None,
             "then_summary": not fields,
+            **self._answer_facts(turn),
         }
         turn.actions.append("address_clarify")
         plan = ReplyPlan(ReplyKind.ADDRESS_CLARIFY, language, facts, fields)
@@ -1051,6 +1113,9 @@ class DialogService:
         self, turn: _Turn, order: Order, language: str, *, reset_attempts: bool = True
     ) -> DialogOutcome:
         state = turn.state
+        # The recipient is never asked while the customer's name is known (``_askable_fields``), so it
+        # must be defaulted on every path here — also after "ок", a map pin or a name set by staff.
+        self._default_recipient(turn, order)
         missing = OrderValidator.missing_fields(order)
         item_questions = bool(state.pending_items)
         askable = self._askable_fields(turn, missing)
@@ -1165,7 +1230,13 @@ class DialogService:
             "payment_method": order.payment_method.value if order.payment_method else None,
             "comment": order.comment,
             "total": f"{money(order.total_amount):.2f}",
+            **self._answer_facts(turn),
         }
+
+    @staticmethod
+    def _answer_facts(turn: _Turn) -> dict[str, Any]:
+        """The ``answers`` fact (``_note_answers``) for replies whose facts are not ``turn.notes``."""
+        return {ANSWERS_FACT: turn.notes[ANSWERS_FACT]} if ANSWERS_FACT in turn.notes else {}
 
     def _note_prices(self, turn: _Turn, order: Order, result: UnderstandingResult) -> None:
         """ "Хочу медовик и 5 эклеров, сколько будет стоить?" — the question is answered while the draft is
@@ -1185,7 +1256,7 @@ class DialogService:
             turn.notes["prices_total"] = f"{money(order.total_amount):.2f}"
 
     def _ask_facts(self, turn: _Turn, order: Order) -> dict[str, Any]:
-        names = {product.id: product.name for product in self._catalog(turn)}
+        products = {product.id: product for product in self._catalog(turn)}
         facts: dict[str, Any] = dict(turn.notes)
         if turn.state.pending_items:
             facts["pending_items"] = [
@@ -1194,7 +1265,9 @@ class DialogService:
                     "product_text": entry.get("product_text"),
                     "quantity": entry.get("quantity"),
                     "name": entry.get("name"),
-                    "options": [names[option] for option in entry.get("options") or [] if option in names],
+                    # the unit decides the wording of "how many?": "Сколько коробочек" for boxes
+                    "unit": products[entry["product_id"]].unit if entry.get("product_id") in products else None,
+                    "options": [products[option].name for option in entry.get("options") or [] if option in products],
                 }
                 for entry in turn.state.pending_items
             ]
@@ -1328,6 +1401,11 @@ class DialogService:
         conversation = turn.conversation
         if reset_attempts:
             conversation.failed_ai_attempts = 0
+        if plan.kind not in (ReplyKind.GREETING, ReplyKind.BLOCKED) and "greeting" not in plan.facts:
+            greeting = detect_greeting(turn.text)
+            if greeting is not None:
+                # "Здравствуйте, хочу 2 коробки": the greeting is answered in kind before the reply itself.
+                plan = replace(plan, facts={**plan.facts, "greeting": greeting.value})
         template_only = uses_template(plan)
         if not template_only and not plan.context:
             plan = replace(plan, context=self._reply_context(turn))
@@ -1375,6 +1453,31 @@ def _has_order_fields(entities: Entities) -> bool:
         entities.payment_method,
     )
     return any(value is not None for value in values)
+
+
+def _brings_items(entities: Entities) -> bool:
+    """The message names products to order (not a removal)."""
+    return bool(entities.items) and entities.items_mode in (ItemsMode.ADD, ItemsMode.REPLACE, ItemsMode.SET)
+
+
+def _is_abandoned(order: Order) -> bool:
+    """Nobody touched the draft for ``DRAFT_ABANDON_HOURS`` (the customer, the bot or staff)."""
+    return ensure_utc(order.updated_at) < now_utc() - timedelta(hours=DRAFT_ABANDON_HOURS)
+
+
+def _quantity_answer(state: DialogState, mentions: list[Any], matcher: ProductMatcher) -> int | None:
+    """ "2 коробки" / "две коробки" to "Сколько коробочек нужно: Шоколадные синнамоны?" is that product's
+    quantity, not two more boxes to choose: the only open question is a quantity, the message is one
+    counted category word, and the word fits the product (a box for a product sold by the box)."""
+    pending = state.pending_items
+    if len(pending) != 1 or pending[0]["kind"] != PENDING_QUANTITY or len(mentions) != 1:
+        return None
+    mention = mentions[0]
+    text = mention.product_text or ""
+    if mention.product_id is not None or mention.quantity is None or not is_generic_mention(text):
+        return None
+    product_id = pending[0].get("product_id")
+    return product_id if product_id is not None and product_id in matcher.match(text).candidates else None
 
 
 def _split_totals(pending: list[dict[str, Any]], resolved: list[dict[str, Any]]) -> list[dict[str, Any]]:

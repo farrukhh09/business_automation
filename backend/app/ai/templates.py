@@ -168,6 +168,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "pending_generic_more": "Подскажите, пожалуйста, какие ещё {quantity} выбрать? Сейчас есть: {options}.",
         "pending_ambiguous": "Уточните, пожалуйста, какой именно товар вы имели в виду: {options}?",
         "pending_quantity": "Сколько штук нужно: {names}?",
+        "pending_quantity_boxes": "Сколько коробочек нужно: {names}?",
         "unknown_products": "К сожалению, {names} нет в нашем каталоге.",
         "available_products": "Сейчас можно заказать: {names}.",
         "too_soon": (
@@ -266,6 +267,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "pending_generic_more": "Лутфан, бигӯед, боз кадомҳоро мехоҳед ({quantity})? Ҳоло дорем: {options}.",
         "pending_ambiguous": "Лутфан, аниқ кунед, кадом маҳсулотро дар назар доред: {options}?",
         "pending_quantity": "Чанд дона лозим аст: {names}?",
+        "pending_quantity_boxes": "Чанд қуттӣ лозим аст: {names}?",
         "unknown_products": "Мутаассифона, {names} дар каталоги мо нест.",
         "available_products": "Ҳоло инҳоро фармоиш додан мумкин аст: {names}.",
         "too_soon": (
@@ -361,6 +363,12 @@ def _unit(unit: Any, language: str) -> str:
     return UNITS_TG.get(text, text) if language == TG else text
 
 
+def _is_box_unit(unit: Any) -> bool:
+    """The catalog's "кор." / "коробка" (or its Tajik "қуттӣ")."""
+    text = _text(unit).lower().rstrip(".")
+    return text.startswith("кор") or text in ("қуттӣ", "куттӣ", "кутти")
+
+
 def _quoted(names: Sequence[Any]) -> str:
     return ", ".join(f"«{_text(name)}»" for name in names if _text(name))
 
@@ -421,11 +429,12 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
             notes.append(_t(language, "pending_generic", options=options))
         elif kind == "ambiguous" and options:
             notes.append(_t(language, "pending_ambiguous", options=options))
-    quantity_names = [
-        pending.get("name") for pending in facts.get("pending_items") or [] if pending.get("kind") == "quantity"
-    ]
-    if quantity_names:
-        notes.append(_t(language, "pending_quantity", names=_names(quantity_names)))
+    quantity_pending = [pending for pending in facts.get("pending_items") or [] if pending.get("kind") == "quantity"]
+    if quantity_pending:
+        # Products sold by the box are asked "сколько коробочек?", not "сколько штук?".
+        boxes = all(_is_box_unit(pending.get("unit")) for pending in quantity_pending)
+        key = "pending_quantity_boxes" if boxes else "pending_quantity"
+        notes.append(_t(language, key, names=_names([pending.get("name") for pending in quantity_pending])))
     timing = facts.get("timing_problem")
     if timing == "delivery_date_past":
         notes.append(_t(language, "date_past", date=_date(facts.get("problem_date")) or "…"))
@@ -489,6 +498,37 @@ def _product_name(product: Any) -> str:
     return _text(product.get("name")) if isinstance(product, Mapping) else _text(product)
 
 
+def _answers(facts: Mapping[str, Any], language: str) -> str:
+    """What the customer asked while giving order data ("а доставка платная?"), answered before the
+    order's own text (fact ``answers``): FAQ entries, delivery / pickup / hours, payment methods —
+    or "уточню у менеджера" when the settings hold nothing about it."""
+    answers = facts.get("answers")
+    if not isinstance(answers, Mapping):
+        return ""
+    parts: list[str] = []
+    if answers.get("need_manager"):
+        parts.append(_t(language, "need_manager"))
+    parts.extend(_faq_block(answers))
+    if _text(answers.get("delivery_info")):
+        parts.append(_text_block(answers.get("delivery_info")))
+    if _text(answers.get("pickup_address")):
+        parts.append(f"{_t(language, 'pickup')}: {_text(answers.get('pickup_address'))}")
+    if _text(answers.get("working_hours")):
+        parts.append(f"{_t(language, 'working_hours')}: {_text(answers.get('working_hours'))}")
+    if _text(answers.get("payment_methods")):
+        parts.append(_text_block(answers.get("payment_methods")))
+    return _paragraphs(*parts)
+
+
+def _greeting_line(facts: Mapping[str, Any], language: str) -> str:
+    """ "Добрый день!" / "Ва алейкум ассалом!" — the customer's own greeting returned (fact ``greeting``)."""
+    try:
+        greeting = Greeting(_text(facts.get("greeting")))
+    except ValueError:
+        greeting = Greeting.HELLO
+    return _t(language, f"greeting_{greeting.value}")
+
+
 # --------------------------------------------------------------------------- order summary (SPEC §12)
 
 
@@ -529,6 +569,7 @@ def _summary(facts: Mapping[str, Any], missing_fields: Sequence[str], language: 
 
     total = _money(facts.get("total"), language)
     return _paragraphs(
+        _answers(facts, language),
         _t(language, "summary_title"),
         "\n".join(_summary_lines(facts, language)),
         "\n".join(details),
@@ -584,7 +625,7 @@ def _ask_missing(facts: Mapping[str, Any], missing_fields: Sequence[str], langua
         # "— 3 кор." already ends the sentence: "Записали: … — 3 кор.", not "кор.."
         recorded = _t(language, "recorded", items=", ".join(lines).removesuffix("."))
     body = "\n".join(part for part in (recorded, *notes, questions) if part)
-    return _paragraphs(prices, body) or _t(language, "clarify")
+    return _paragraphs(_answers(facts, language), prices, body) or _t(language, "clarify")
 
 
 def _address_clarify(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -610,7 +651,7 @@ def _address_clarify(facts: Mapping[str, Any], missing_fields: Sequence[str], la
         body = f"{_t(language, 'address_not_found')} {hint}"
     if facts.get("then_summary"):
         body = _paragraphs(body, _t(language, "address_continue"))
-    return _paragraphs(body, _join_questions(_questions(missing_fields, language), language))
+    return _paragraphs(_answers(facts, language), body, _join_questions(_questions(missing_fields, language), language))
 
 
 def _small_talk(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -649,12 +690,8 @@ def _with_reminder(body: str, facts: Mapping[str, Any], missing_fields: Sequence
 def _greeting(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
     """ "Добрый день! Что желаете заказать? 😊" — the customer's own greeting back (fact ``greeting``);
     with an open draft its questions or the confirmation reminder take the place of the question."""
-    try:
-        greeting = Greeting(_text(facts.get("greeting")))
-    except ValueError:
-        greeting = Greeting.HELLO
     reminder = _reminder(facts, missing_fields, language)
-    return f"{_t(language, f'greeting_{greeting.value}')} {reminder or _t(language, 'greeting_question')}"
+    return f"{_greeting_line(facts, language)} {reminder or _t(language, 'greeting_question')}"
 
 
 def _faq_answer(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -778,7 +815,12 @@ def render(
     renderer = _RENDERERS.get(key)
     if renderer is None:
         raise ValueError(f"Unknown reply kind: {key!r}")
-    return renderer(facts or {}, list(missing_fields), _lang(language)).strip()
+    values = facts or {}
+    text = renderer(values, list(missing_fields), _lang(language)).strip()
+    if key != "GREETING" and values.get("greeting"):
+        # "Здравствуйте, хочу 2 коробки": the customer's greeting is answered before the reply itself.
+        text = f"{_greeting_line(values, _lang(language))} {text}".strip()
+    return text
 
 
 def voice_not_recognized(language: object) -> str:

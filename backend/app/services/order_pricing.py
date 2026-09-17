@@ -29,7 +29,9 @@ ZERO = Decimal("0.00")
 ADD = "add"
 REPLACE = "replace"
 REMOVE = "remove"
-ITEMS_MODES: tuple[str, ...] = (ADD, REPLACE, REMOVE)
+#: "Шоколадных не 2, а 3": the named positions get exactly these quantities, every other position stays.
+SET = "set"
+ITEMS_MODES: tuple[str, ...] = (ADD, REPLACE, REMOVE, SET)
 
 
 def money(value: Decimal | int | float | str) -> Decimal:
@@ -150,14 +152,14 @@ class OrderPricing:
         mode: str = ADD,
         keep_prices: bool = True,
     ) -> bool:
-        """Apply ``specs`` in ``mode`` (``add`` / ``replace`` / ``remove``); returns "something changed".
+        """Apply ``specs`` in ``mode`` (``add`` / ``replace`` / ``remove`` / ``set``); returns "something changed".
 
-        ``products`` must contain every ``product_id`` of ``specs`` for ``add``/``replace``
+        ``products`` must contain every ``product_id`` of ``specs`` for ``add``/``replace``/``set``
         (``OrderService`` validates that they exist, are active and not deleted beforehand).
         """
         resolved_mode = (mode or ADD).strip().lower()
         if resolved_mode not in ITEMS_MODES:
-            raise BadRequestError("Недопустимый режим изменения позиций: ожидается add, replace или remove")
+            raise BadRequestError("Недопустимый режим изменения позиций: ожидается add, replace, remove или set")
         before = items_snapshot(order)
         spec_list = [ItemSpec.coerce(spec) for spec in specs]
 
@@ -165,6 +167,8 @@ class OrderPricing:
             cls._replace(order, spec_list, products, keep_prices)
         elif resolved_mode == ADD:
             cls._add(order, spec_list, products)
+        elif resolved_mode == SET:
+            cls._set(order, spec_list, products)
         else:
             cls._remove(order, spec_list)
 
@@ -218,6 +222,29 @@ class OrderPricing:
                 cls.set_quantity(existing, existing.quantity + quantity)
             else:
                 order.items.append(cls.new_item(product, quantity, spec.comment))
+
+    @classmethod
+    def _set(cls, order: Order, specs: Sequence[ItemSpec], products: Mapping[int, Product]) -> None:
+        """A corrected quantity ("шоколадных не 2, а 3"): the position takes exactly the new quantity (its
+        price snapshot stays), a product not in the order yet is added, ``0`` removes it; positions of
+        other products are untouched. Several positions of one product (different comments) are folded
+        into the first one — the customer named one total."""
+        for spec in specs:
+            quantity = spec.quantity if spec.quantity is not None else 1
+            matches = [item for item in order.items if item.product_id == spec.product_id]
+            if not matches:
+                if quantity >= 1:
+                    order.items.append(cls.new_item(products[spec.product_id], quantity, spec.comment))
+                continue
+            first, *rest = matches
+            for item in rest:
+                order.items.remove(item)
+            if quantity < 1:
+                order.items.remove(first)
+                continue
+            cls.set_quantity(first, quantity)
+            if spec.comment:
+                first.comment = spec.comment
 
     @classmethod
     def _remove(cls, order: Order, specs: Sequence[ItemSpec]) -> None:
