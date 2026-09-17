@@ -1,0 +1,279 @@
+"""Reply templates and the responder (05-ai.md §6): template-only kinds, LLM wording, guard fallbacks."""
+
+from decimal import Decimal
+
+import pytest
+
+from app.ai import templates
+from app.ai.responder import TEMPLATE_KINDS, ReplyKind, ReplyPlan, ReplySource, Responder, fact_amounts
+from tests.bot_fakes import ScriptedLLM
+
+SUMMARY_FACTS = {
+    "order_id": 12,
+    "items": [
+        {"name": "Красный бархат", "quantity": 1, "unit": "шт.", "comment": None},
+        {"name": "Медовик", "quantity": 1, "unit": "шт.", "comment": "надпись «С днём рождения»"},
+    ],
+    "delivery_date": "2026-09-16",
+    "delivery_time": "18:00",
+    "delivery_type": "DELIVERY",
+    "address": "Сино, 82 мкр, дом 5, кв. 10",
+    "recipient_name": "Алия",
+    "recipient_phone": "+992901234567",
+    "payment_method": "CASH",
+    "comment": None,
+    "total": "1500.00",
+}
+
+
+# --------------------------------------------------------------------------- templates
+
+
+def test_summary_template_follows_spec_12() -> None:
+    assert templates.render(ReplyKind.ORDER_SUMMARY, "ru", SUMMARY_FACTS) == (
+        "Проверьте, пожалуйста, заказ:\n\n"
+        "Красный бархат — 1 шт.\n"
+        "Медовик — 1 шт. (надпись «С днём рождения»)\n\n"
+        "Дата: 16.09.2026\n"
+        "Время: 18:00\n"
+        "Доставка: да\n"
+        "Адрес: Сино, 82 мкр, дом 5, кв. 10\n"
+        "Получатель: Алия, +992901234567\n"
+        "Оплата: наличными\n\n"
+        "Итого: 1 500 сомони.\n\n"
+        "Всё верно? Напишите «Да», чтобы подтвердить."
+    )
+
+
+def test_summary_template_in_tajik() -> None:
+    text = templates.render("ORDER_SUMMARY", "tg", {**SUMMARY_FACTS, "delivery_type": "PICKUP", "address": None})
+    assert text.startswith("Лутфан, фармоишро санҷед:\n\nКрасный бархат — 1 дона\n")
+    assert "Худатон мегиред: ҳа" in text
+    assert "Ҳамагӣ: 1 500 сомонӣ." in text
+    assert text.endswith("Ҳама дуруст? Барои тасдиқ «Ҳа» нависед.")
+
+
+def test_ask_missing_numbers_two_questions_like_spec_11() -> None:
+    text = templates.render("ASK_MISSING", "ru", {}, ["delivery_time", "delivery_type", "phone"])
+    assert text == "Уточните, пожалуйста:\n1. К какому времени?\n2. Это будет доставка или самовывоз?"
+
+
+def test_ask_missing_puts_item_questions_first() -> None:
+    facts = {"pending_items": [{"kind": "generic", "product_text": "торт", "quantity": 2, "options": ["А", "Б"]}]}
+    assert templates.render("ASK_MISSING", "ru", facts, ["items"]) == (
+        "Подскажите, пожалуйста, какие именно? Сейчас есть: А, Б."
+    )
+
+
+def test_money_keeps_kopecks_only_when_present() -> None:
+    text = templates.render("ORDER_CONFIRMED", "ru", {"order_id": 3, "total": "12500.50"})
+    assert text == "Спасибо! Заказ №3 подтверждён ✅\nИтого: 12 500,50 сомони."
+
+
+def test_address_clarify_without_candidates_and_link() -> None:
+    text = templates.render("ADDRESS_CLARIFY", "ru", {"candidates": [], "link": None})
+    assert text == (
+        "Не нашли этот адрес на карте 🙁 Напишите, пожалуйста, точнее: район или микрорайон, улицу, дом и ориентир."
+    )
+
+
+def test_address_clarify_by_geocode_status() -> None:
+    link = "http://x/l/t"
+    approximate = templates.render("ADDRESS_CLARIFY", "ru", {"approximate": "улица Айни, Душанбе", "link": link})
+    assert approximate.startswith("Нашли на карте «улица Айни, Душанбе», но не сам дом.")
+    assert link in approximate
+
+    failed = templates.render("ADDRESS_CLARIFY", "ru", {"status": "FAILED", "link": link, "then_summary": True})
+    assert failed.startswith("Сейчас не получается проверить адрес на карте — ничего страшного")
+    assert "напишите «дальше»" in failed
+
+    with_questions = templates.render("ADDRESS_CLARIFY", "ru", {"link": link}, ["phone"])
+    assert with_questions.endswith("Напишите, пожалуйста, номер телефона для связи.")
+    assert "«дальше»" not in with_questions  # the order is not complete yet, the questions continue
+
+    tajik = templates.render("ADDRESS_CLARIFY", "tg", {"approximate": "кӯчаи Айнӣ", "link": link})
+    assert tajik.startswith("Дар харита «кӯчаи Айнӣ»-ро ёфтем")
+
+
+def test_small_talk_templates() -> None:
+    assert (
+        templates.render("SMALL_TALK", "ru", {"small_talk": "thanks"}) == "Пожалуйста! Будем рады видеть вас снова 😊"
+    )
+    assert templates.render("SMALL_TALK", "tg", {"small_talk": "goodbye"}).startswith("Хайр, рӯзи хуш!")
+    # "ок" while the draft is being filled → only the pending questions
+    assert templates.render("SMALL_TALK", "ru", {"small_talk": "ack"}, ["phone"]) == (
+        "Напишите, пожалуйста, номер телефона для связи."
+    )
+    assert templates.render("SMALL_TALK", "ru", {"small_talk": "thanks", "confirmation_pending_order_id": 5}) == (
+        "Пожалуйста! Будем рады видеть вас снова 😊\n\nЧтобы подтвердить заказ №5, напишите «Да»."
+    )
+
+
+def test_timing_notes_name_the_past_date_and_the_earliest_slot() -> None:
+    past = templates.render(
+        "ASK_MISSING", "ru", {"timing_problem": "delivery_date_past", "problem_date": "2026-08-05"}, ["delivery_date"]
+    )
+    assert past == "05.08.2026 уже прошло 🙂\nНа какую дату нужен заказ?"
+    soon = templates.render(
+        "ASK_MISSING",
+        "ru",
+        {
+            "timing_problem": "delivery_too_soon",
+            "min_lead_time_hours": 24,
+            "earliest_date": "2026-09-17",
+            "earliest_time": "14:00",
+            "earliest_relative": "tomorrow",
+        },
+        ["delivery_time"],
+    )
+    assert soon.startswith("Заказы принимаем не позднее чем за 24 ч. Самое раннее — завтра после 14:00.")
+    soon_tg = templates.render(
+        "ASK_MISSING",
+        "tg",
+        {"timing_problem": "delivery_too_soon", "earliest_date": "2026-09-20", "earliest_time": "10:00"},
+        [],
+    )
+    assert "Барвақттарин — 20.09.2026 баъд аз соати 10:00." in soon_tg
+
+
+@pytest.mark.parametrize("kind", [kind.value for kind in ReplyKind])
+@pytest.mark.parametrize("language", ["ru", "tg"])
+def test_every_kind_renders_in_both_languages_with_empty_facts(kind: str, language: str) -> None:
+    assert templates.render(kind, language, {}, []).strip()
+
+
+def test_unknown_kind_is_a_programming_error() -> None:
+    with pytest.raises(ValueError):
+        templates.render("SOMETHING", "ru", {})
+
+
+def test_voice_not_recognized_text() -> None:
+    assert templates.voice_not_recognized("ru") == "Не получилось разобрать голосовое, напишите, пожалуйста, текстом."
+    assert templates.voice_not_recognized("tg").startswith("Паёми овозиро")
+
+
+# --------------------------------------------------------------------------- responder
+
+
+def test_template_kinds_never_reach_the_llm() -> None:
+    llm = ScriptedLLM(reply="Заказ подтверждён, 999 сомони")
+    responder = Responder(llm)
+    for kind in TEMPLATE_KINDS:
+        reply = responder.generate_reply(ReplyPlan(kind, "ru", {"order_id": 1}))
+        assert reply.source == ReplySource.TEMPLATE
+    assert llm.text_calls == []
+
+
+def test_llm_wording_is_used_when_the_guard_accepts_it() -> None:
+    llm = ScriptedLLM(reply="Здравствуйте! Медовик стоит 750 сомони 😊")
+    responder = Responder(llm, catalog_names=["Медовик", "Наполеон"])
+    plan = ReplyPlan(ReplyKind.PRODUCT_INFO, "ru", {"products": [{"name": "Медовик", "price": "750.00"}]})
+
+    reply = responder.generate_reply(plan)
+
+    assert reply.source == ReplySource.LLM and reply.text == "Здравствуйте! Медовик стоит 750 сомони 😊"
+    assert "KIND: PRODUCT_INFO" in llm.text_calls[0]["prompt"]
+
+
+@pytest.mark.parametrize(
+    ("llm_text", "violation"),
+    [
+        ("Медовик стоит 700 сомони", "amount_not_allowed:700.00"),
+        ("Ваш заказ подтверждён!", "confirmation_claim"),
+        ("Медовик в наличии, скидка 10%", "forbidden_phrase"),
+        ("Есть Медовик и Наполеон", "product_not_allowed:Наполеон"),
+        ("Салом! Медовик ҳаст, нархаш 750 сомонӣ", "language_mismatch:tg"),
+    ],
+)
+def test_guard_violation_falls_back_to_the_template(llm_text: str, violation: str) -> None:
+    responder = Responder(ScriptedLLM(reply=llm_text), catalog_names=["Медовик", "Наполеон"])
+    plan = ReplyPlan(
+        ReplyKind.PRODUCT_INFO, "ru", {"products": [{"name": "Медовик", "price": "750.00", "unit": "шт."}]}
+    )
+
+    reply = responder.generate_reply(plan)
+
+    assert reply.source == ReplySource.FALLBACK
+    assert reply.text == "Вот что у нас есть:\nМедовик — 750 сомони / шт."
+    assert any(item.startswith(violation) for item in reply.violations), reply.violations
+
+
+def test_llm_error_falls_back_to_the_template() -> None:
+    reply = Responder(ScriptedLLM()).generate_reply(ReplyPlan(ReplyKind.GREETING, "ru"))
+    assert reply.source == ReplySource.FALLBACK and reply.text == "Здравствуйте! Чем можем помочь? 😊"
+
+
+@pytest.mark.parametrize(
+    ("language", "llm_text", "violation"),
+    [
+        # Russian sentence with a Tajik currency word is not a Tajik reply
+        ("tg", "Торт «Наполеон» (слоёные коржи) стоит 200 сомонӣ за шт.", "language_mismatch:ru"),
+        # Persian/Arabic script slipped into a Tajik reply
+        ("tg", "Салом! Хуш омадед, мо хурсандем, ки ба شما кумак кунем", "foreign_script"),
+    ],
+)
+def test_mixed_language_and_foreign_script_fall_back(language: str, llm_text: str, violation: str) -> None:
+    responder = Responder(ScriptedLLM(reply=llm_text), catalog_names=["Торт «Наполеон»"])
+    plan = ReplyPlan(
+        ReplyKind.PRODUCT_INFO,
+        language,
+        {"products": [{"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "слоёные коржи"}]},
+    )
+    reply = responder.generate_reply(plan)
+    assert reply.source == ReplySource.FALLBACK
+    assert any(item.startswith(violation) for item in reply.violations), reply.violations
+
+
+def test_proper_tajik_reply_with_russian_product_name_passes() -> None:
+    text = "Торти «Наполеон» 200 сомонӣ арзиш дорад, вазнаш 1,5 кг 😊"
+    responder = Responder(ScriptedLLM(reply=text), catalog_names=["Торт «Наполеон»"])
+    plan = ReplyPlan(
+        ReplyKind.PRODUCT_INFO,
+        "tg",
+        {"products": [{"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "1,5 кг"}]},
+    )
+    reply = responder.generate_reply(plan)
+    assert reply.source == ReplySource.LLM, reply.violations
+
+
+def test_reply_context_reaches_the_prompt_but_not_the_facts() -> None:
+    llm = ScriptedLLM(reply="Отлично, записали! На какой день вам удобно?")
+    plan = ReplyPlan(
+        ReplyKind.ASK_MISSING,
+        "ru",
+        {"order_so_far": {"items": [{"name": "Медовик", "quantity": 1}]}},
+        ["delivery_date"],
+        question_hint="На какую дату нужен заказ?",
+        context={
+            "customer_message": "хочу медовик, стоил 750 сомони в прошлый раз",
+            "history": [{"role": "assistant", "text": "Здравствуйте!"}],
+            "customer_name": "Алия",
+        },
+    )
+    reply = Responder(llm, catalog_names=["Медовик"]).generate_reply(plan)
+    assert reply.source == ReplySource.LLM
+    prompt = llm.text_calls[0]["prompt"]
+    assert "CUSTOMER NAME: Алия" in prompt
+
+    # a price quoted by the customer is context, not a fact: the guard still rejects it
+    echo = ScriptedLLM(reply="Медовик — 750 сомони, записали!")
+    rejected = Responder(echo, catalog_names=["Медовик"]).generate_reply(plan)
+    assert rejected.source == ReplySource.FALLBACK and any("amount_not_allowed" in v for v in rejected.violations)
+
+
+def test_without_llm_everything_is_a_template() -> None:
+    reply = Responder(None).generate_reply(ReplyPlan(ReplyKind.CLARIFY, "tg"))
+    assert reply.source == ReplySource.TEMPLATE and reply.language == "tg"
+
+
+def test_amounts_from_admin_texts_are_facts_but_dates_are_not() -> None:
+    amounts = fact_amounts(
+        {
+            "total": "1500.00",
+            "delivery_info": "Доставка по городу — 20 сомони, за город 1 000 сомони",
+            "delivery_date": "2026-09-16",
+            "orders": [{"order_id": 7, "total": 300}],
+        }
+    )
+    assert {Decimal("1500"), Decimal("20"), Decimal("1000"), Decimal("300")} <= amounts
+    assert Decimal("2026") not in amounts and Decimal("7") not in amounts

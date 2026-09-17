@@ -1,0 +1,37 @@
+# Текстовые файлы хранятся и выгружаются с LF — одинаково на Windows и в Docker.
+* text=auto eol=lf
+
+# Shell-скрипты обязаны иметь LF, иначе /bin/sh в контейнере не запустит их.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+.env.example text eol=lf
+
+# Скрипты Windows — CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Бинарные файлы — без нормализации и текстовых diff.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.mp3 binary
+*.mp4 binary
+*.m4a binary
+*.wav binary
+*.ogg binary
+*.zip binary
+*.gz binary
+*.pbf binary
+*.osrm* binary

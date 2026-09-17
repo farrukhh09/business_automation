@@ -1,0 +1,36 @@
+# Production dependencies (pinned to the versions verified in backend/.venv).
+# Install: pip install -r requirements.txt
+
+# --- Web / API ---
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn[standard]==0.53.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+python-dotenv==1.2.3
+email-validator==2.3.0
+python-multipart==0.0.32
+slowapi==0.1.10
+limits==5.8.0
+
+# --- Database ---
+SQLAlchemy==2.0.53
+psycopg[binary]==3.3.5
+alembic==1.20.0
+
+# --- Auth ---
+PyJWT==2.14.0
+pwdlib[argon2]==0.3.1
+
+# --- Background jobs ---
+celery==5.6.3
+redis==8.1.0
+
+# --- Integrations ---
+httpx==0.28.1
+anthropic==1.5.0
+phonenumbers==9.0.39
+
+# --- Misc ---
+tzdata==2026.4
+PyYAML==6.0.3

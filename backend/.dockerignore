@@ -1,0 +1,33 @@
+# Виртуальные окружения
+.venv/
+venv/
+env/
+
+# Кэши Python и тестов
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Секреты — никогда не попадают в образ
+.env
+.env.*
+
+# Данные времени выполнения
+media/
+*.db
+*.sqlite
+*.sqlite3
+celerybeat-schedule*
+
+# VCS и IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp

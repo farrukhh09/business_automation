@@ -1,0 +1,158 @@
+# Docker Compose — система автоматизации заказов «Домашняя выпечка».
+#
+# Подготовка:   скопируйте .env.example в .env и заполните значения.
+# Запуск:       docker compose up -d --build
+# С OSRM:       docker compose --profile routing up -d --build
+#               (данные OSRM нужно подготовить заранее — docs/deployment-notes.md)
+# Миграции:     применяются автоматически при старте backend;
+#               вручную: docker compose run --rm backend migrate
+#
+# PostgreSQL и Redis наружу не публикуются (доступны только внутри сети compose).
+
+# Явное имя проекта: имя каталога может содержать кириллицу/пробелы,
+# из которых Compose не может вывести допустимое имя проекта.
+name: bakery
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Общая часть для backend / worker / beat: один Dockerfile, разные режимы entrypoint.
+x-backend-common: &backend-common
+  build:
+    context: ./backend
+  env_file:
+    - .env
+  environment:
+    # Подключения всегда указывают на сервисы compose (перекрывают значения из .env).
+    DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-bakery}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-bakery}"
+    REDIS_URL: "redis://redis:6379/0"
+    MEDIA_ROOT: "/app/media"
+  restart: unless-stopped
+  logging: *default-logging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-bakery}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
+      POSTGRES_DB: "${POSTGRES_DB:-bakery}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # -h 127.0.0.1: во время initdb временный сервер слушает только unix-сокет,
+      # поэтому проверка по TCP не даёт ложного «ready» до перезапуска postgres.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    logging: *default-logging
+
+  backend:
+    <<: *backend-common
+    command: ["api"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - media:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # В slim-образе нет curl — проверка стандартной библиотекой Python.
+      # http.client (а не urllib) игнорирует HTTP_PROXY/HTTPS_PROXY, если они заданы в .env.
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import http.client, sys; c = http.client.HTTPConnection('127.0.0.1', 8000, timeout=5); c.request('GET', '/api/health'); sys.exit(0 if c.getresponse().status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # Миграции ждут БД до ~60 с (30 попыток), затем старт uvicorn.
+      start_period: 120s
+
+  worker:
+    <<: *backend-common
+    command: ["worker"]
+    volumes:
+      # Задачи TTS пишут аудиофайлы, backend отдаёт их по /api/media.
+      - media:/app/media
+    stop_grace_period: 60s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        # backend healthy = миграции применены.
+        condition: service_healthy
+
+  beat:
+    <<: *backend-common
+    command: ["beat"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # rewrites /api/* → backend вычисляются при сборке Next.js.
+        BACKEND_INTERNAL_URL: "http://backend:8000"
+        NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME:-Домашняя выпечка}"
+    environment:
+      NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME:-Домашняя выпечка}"
+      BACKEND_INTERNAL_URL: "http://backend:8000"
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_started
+    restart: unless-stopped
+    logging: *default-logging
+
+  # Опционально: self-hosted OSRM (матрица расстояний/времени по дорогам).
+  # Включается профилем: docker compose --profile routing up -d
+  # В .env: OSRM_URL=http://osrm:5000. Порт наружу не публикуется.
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend
+    profiles: ["routing"]
+    command: ["osrm-routed", "--algorithm", "mld", "/data/tajikistan-latest.osrm"]
+    volumes:
+      - ./data/osrm:/data
+    expose:
+      - "5000"
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  postgres_data:
+  redis_data:
+  media:
