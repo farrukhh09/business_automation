@@ -54,6 +54,7 @@ id PK; user_id FK→users (cascade); jti str(64) U; expires_at datetime; revoked
 | username | str(64)? | Instagram username |
 | language | Language, default ru | последний определённый язык общения |
 | is_new | bool, default true | см. правило в `03-business-rules.md` §2 |
+| is_blocked | bool, default false | чёрный список (ставит сотрудник вручную), см. `03-business-rules.md` §2 |
 | last_order_at | datetime? | время последнего не отменённого подтверждённого заказа |
 | notes | text? | заметки оператора |
 

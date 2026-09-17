@@ -127,6 +127,7 @@ def upgrade() -> None:
         sa.Column("username", sa.String(length=64), nullable=True),
         sa.Column("language", _enum("language", LANGUAGE), server_default="ru", nullable=False),
         sa.Column("is_new", sa.Boolean(), server_default=_true(), nullable=False),
+        sa.Column("is_blocked", sa.Boolean(), server_default=_false(), nullable=False),
         sa.Column("last_order_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
         _created_at(),

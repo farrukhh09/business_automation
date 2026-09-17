@@ -96,6 +96,7 @@ class DialogState:
     cancel_order_id: int | None = None
     language: str | None = None
     last_intent: str | None = None
+    blocked_notice_sent: bool = False
 
     @classmethod
     def from_json(cls, data: Any) -> "DialogState":
@@ -113,6 +114,7 @@ class DialogState:
             cancel_order_id=_int_or_none(data.get("cancel_order_id")),
             language=language if language in ("ru", "tg") else None,
             last_intent=data.get("last_intent") if isinstance(data.get("last_intent"), str) else None,
+            blocked_notice_sent=bool(data.get("blocked_notice_sent")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -126,6 +128,7 @@ class DialogState:
             "cancel_order_id": self.cancel_order_id,
             "language": self.language,
             "last_intent": self.last_intent,
+            "blocked_notice_sent": self.blocked_notice_sent,
         }
 
     def pending_of(self, kind: str) -> list[dict[str, Any]]:

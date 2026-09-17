@@ -37,9 +37,9 @@
 | GET | /customers | STAFF | query: `search` (имя/username/телефон), `customer_type` (`new`/`regular`), `page`, `page_size`, `sort` (`last_order_at`/`created_at`/`total_spent`, префикс `-` = desc; default `-last_order_at`) → `Page[CustomerListItem]` |
 | GET | /customers/{id} | STAFF | → `CustomerDetail` |
 | POST | /customers | STAFF | `{name, phone?, username?, language?, notes?}` → `CustomerDetail` 201 |
-| PATCH | /customers/{id} | STAFF | `{name?, phone?, language?, notes?}` → `CustomerDetail` |
+| PATCH | /customers/{id} | STAFF | `{name?, phone?, language?, notes?, is_blocked?}` → `CustomerDetail` |
 
-`CustomerListItem = {id, name, username, phone, instagram_user_id, language, is_new, customer_type: "NEW"|"REGULAR", orders_count, total_spent: Money, last_order_at, created_at}`
+`CustomerListItem = {id, name, username, phone, instagram_user_id, language, is_new, is_blocked, customer_type: "NEW"|"REGULAR", orders_count, total_spent: Money, last_order_at, created_at}`
 `CustomerDetail = CustomerListItem + {notes, conversation_id: int|null, orders: OrderListItem[]}` (заказы — все, новые сверху). `orders_count`/`total_spent` — только valid-заказы.
 
 ## 4. Products

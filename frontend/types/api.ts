@@ -288,6 +288,7 @@ export interface CustomerListItem {
   instagram_user_id: string | null;
   language: Language;
   is_new: boolean;
+  is_blocked: boolean;
   customer_type: CustomerType;
   /** valid orders only */
   orders_count: number;
@@ -317,6 +318,7 @@ export interface CustomerUpdate {
   phone?: string | null;
   language?: Language;
   notes?: string | null;
+  is_blocked?: boolean;
 }
 
 /* ------------------------------------------------------------------ */

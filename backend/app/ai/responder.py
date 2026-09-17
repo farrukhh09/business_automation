@@ -60,6 +60,7 @@ class ReplyKind(StrEnum):
     UNKNOWN_PRODUCT = "UNKNOWN_PRODUCT"
     CLARIFY = "CLARIFY"
     SMALL_TALK = "SMALL_TALK"  # thanks, goodbye, "ок", chat — worded by the LLM, template fallback
+    BLOCKED = "BLOCKED"  # customer is blacklisted by staff — fixed refusal, sent once
 
 
 #: 05 §6: "Всегда шаблоном (без LLM)".
@@ -74,6 +75,7 @@ TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
         ReplyKind.HANDOFF,
         ReplyKind.NEED_MANAGER,
         ReplyKind.ADDRESS_CLARIFY,
+        ReplyKind.BLOCKED,
     }
 )
 

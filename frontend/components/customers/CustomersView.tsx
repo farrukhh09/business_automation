@@ -10,7 +10,7 @@ import { FilterBar, FilterBarItem } from "@/components/shared/FilterBar";
 import { MoneyText } from "@/components/shared/MoneyText";
 import { PhoneLink } from "@/components/shared/CustomerLink";
 import { Button } from "@/components/ui/Button";
-import { EnumBadge } from "@/components/ui/Badge";
+import { Badge, EnumBadge } from "@/components/ui/Badge";
 import { IconPlus, IconSearch } from "@/components/ui/icons";
 import { Input } from "@/components/ui/Input";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -83,7 +83,14 @@ export function CustomersView() {
       header: "Имя",
       cell: (customer) => (
         <div className="flex flex-col">
-          <span className="font-medium text-slate-900">{customerDisplayName(customer)}</span>
+          <span className="flex items-center gap-2 font-medium text-slate-900">
+            {customerDisplayName(customer)}
+            {customer.is_blocked ? (
+              <Badge tone="red" dot>
+                Заблокирован
+              </Badge>
+            ) : null}
+          </span>
           {customer.username ? <span className="text-xs text-slate-500">@{customer.username}</span> : null}
         </div>
       ),

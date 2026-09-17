@@ -2,6 +2,22 @@
 
 > Обновлять после каждого этапа. Последнее обновление: 2026-09-17.
 
+**17.09.2026 — чёрный список клиентов.** По запросу заказчика (токсичные клиенты: много вопросов,
+торгуются, не хотят предоплату) добавлена ручная блокировка — намеренно **без** автоматического
+AI-детектора (риск забанить обычного осторожного клиента), сотрудник ставит флаг сам в карточке
+клиента после того как сам увидел проблему. `Customer.is_blocked` (`app/models/customer.py`,
+заложено в `alembic/versions/0001_initial.py`, проект пока на единственной initial-миграции —
+её и правили, см. `test_migrations.py::test_single_head_is_initial_revision`), `PATCH /customers/{id}
+{is_blocked}` (`CustomerUpdate`/`CustomerListItem`, `customer_service.PROFILE_FIELDS`). В
+`DialogService` проверка стоит раньше даже явной просьбы позвать оператора (`_blocked_reason`,
+`dialog_service.py`) — пока флаг не снят, LLM вообще не вызывается: первое сообщение получает
+фиксированный шаблонный ответ `ReplyKind.BLOCKED` («К сожалению, в данное время мы не можем принять
+Ваш заказ.» / таджикский аналог в `templates.py`), это помнится в `DialogState.blocked_notice_sent`,
+все следующие сообщения — полное молчание (`actions=["blocked_silent"]`), `needs_attention=true`
+для видимости в админке. Фронтенд: переключатель в `CustomerProfileCard.tsx` (карточка клиента) и
+бейдж «Заблокирован»/«Открыт» там же и в списке клиентов (`CustomersView.tsx`). Тест —
+`test_blocked_customer_gets_one_refusal_then_silence` в `test_dialog_service.py`. 2119 тестов проходят.
+
 **17.09.2026 — перенос города бизнеса с Душанбе на Худжанд.** По просьбе заказчика: `CITY_NAME`,
 `CITY_BBOX`, `CITY_CENTER` (`app/core/config.py`, `.env.example`) и `DEFAULT_CITY` (`app/models/delivery.py`,
 `alembic/versions/0001_initial.py`, ещё не выпущенная initial-миграция — правился сам файл, а не новая

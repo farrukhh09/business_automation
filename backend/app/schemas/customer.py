@@ -45,6 +45,7 @@ class CustomerUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=PHONE_MAX)
     language: Language | None = None
     notes: str | None = Field(default=None, max_length=NOTES_MAX)
+    is_blocked: bool | None = None
 
 
 class CustomerListItem(ORMModel):
@@ -55,6 +56,7 @@ class CustomerListItem(ORMModel):
     instagram_user_id: str | None = None
     language: Language
     is_new: bool
+    is_blocked: bool
     customer_type: CustomerType
     orders_count: int = 0
     total_spent: NonNegativeMoney = Decimal("0.00")
@@ -82,6 +84,7 @@ def build_customer_list_item(
         instagram_user_id=customer.instagram_user_id,
         language=customer.language,
         is_new=customer.is_new,
+        is_blocked=customer.is_blocked,
         customer_type=customer.customer_type,  # type: ignore[arg-type]
         orders_count=orders_count,
         total_spent=Decimal(str(total_spent)),

@@ -46,9 +46,9 @@ from app.services.phone import normalize_phone
 
 logger = get_logger(__name__)
 
-PROFILE_FIELDS: tuple[str, ...] = ("name", "phone", "username", "language", "notes")
+PROFILE_FIELDS: tuple[str, ...] = ("name", "phone", "username", "language", "notes", "is_blocked")
 #: NOT NULL columns: an explicit ``null`` in a PATCH body means "leave unchanged", not "clear".
-NON_NULLABLE_PROFILE_FIELDS: frozenset[str] = frozenset({"name", "language"})
+NON_NULLABLE_PROFILE_FIELDS: frozenset[str] = frozenset({"name", "language", "is_blocked"})
 
 
 def _invalid_phone(value: str) -> BusinessRuleError:

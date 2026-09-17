@@ -4,6 +4,8 @@ The LLM only *reads* the message (``understand``) and *words* some replies (``Re
 decision is taken here, deterministically, against the database:
 
 1. AI switched off or the conversation is with a human → no reply, ``needs_attention``.
+1b. The customer is blacklisted (``Customer.is_blocked``, staff-only toggle, 03 §2): a fixed refusal
+    is sent once, then the bot stays silent on every later message — never re-decided by the LLM.
 2. An explicit request for a human (keywords, 03 §6) → handoff.
 3. Waiting for "Да" (order summary / cancellation) → ``classify_confirmation``; only ``YES`` with an
    unchanged order (content hash) confirms (03 §5). A bare number answers "how many?" or picks an
@@ -223,6 +225,9 @@ class DialogService:
         skipped = self._skip_reason(turn)
         if skipped is not None:
             return skipped
+        blocked = self._blocked_reason(turn)
+        if blocked is not None:
+            return blocked
 
         language = detect_language(turn.text, None, self._known_language(turn), self._catalog_phrases(turn))
         if message.message_type == MessageType.IMAGE and not turn.text:
@@ -270,6 +275,9 @@ class DialogService:
         skipped = self._skip_reason(turn)
         if skipped is not None:
             return skipped
+        blocked = self._blocked_reason(turn)
+        if blocked is not None:
+            return blocked
         if turn.state.draft_order_id != order.id or order.status not in DRAFT_ORDER_STATUSES:
             return DialogOutcome(actions=["not_current_draft"])
         turn.draft, turn.draft_loaded = order, True
@@ -303,6 +311,19 @@ class DialogService:
         self.db.commit()
         log_event(logger, "dialog.skipped", conversation_id=turn.conversation.id, reason=reason)
         return DialogOutcome(actions=[reason])
+
+    def _blocked_reason(self, turn: _Turn) -> DialogOutcome | None:
+        """A staff-blacklisted customer (03 §2): one fixed refusal, then silence — never the LLM."""
+        if not turn.customer.is_blocked:
+            return None
+        turn.conversation.needs_attention = True
+        if turn.state.blocked_notice_sent:
+            self.db.commit()
+            log_event(logger, "dialog.skipped", conversation_id=turn.conversation.id, reason="blocked_silent")
+            return DialogOutcome(actions=["blocked_silent"])
+        turn.state.blocked_notice_sent = True
+        language = self._known_language(turn)
+        return self._finish(turn, ReplyPlan(ReplyKind.BLOCKED, language), reset_attempts=False)
 
     def _known_language(self, turn: _Turn) -> str:
         if turn.state.language:

@@ -610,6 +610,28 @@ def test_bot_is_silent_in_human_handoff_and_when_ai_is_off(
     assert llm.json_calls == []
 
 
+def test_blocked_customer_gets_one_refusal_then_silence(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    llm = ScriptedLLM(default=understanding(intent="CREATE_ORDER", entities={"items": [item("Медовик", 1)]}))
+    conversation = make_conversation(is_blocked=True)
+    bot = Bot(db, conversation, llm)
+
+    first = bot.say("Здравствуйте, хочу торт медовик, сколько это будет стоить?")
+    assert first.reply is not None and first.reply.kind == ReplyKind.BLOCKED
+    assert reply_text(first) == "К сожалению, в данное время мы не можем принять Ваш заказ."
+    assert llm.json_calls == []  # never reaches understanding — no wasted AI call
+    db.refresh(conversation)
+    assert conversation.needs_attention
+    assert bot.state.blocked_notice_sent is True
+
+    second = bot.say("А почему? Ответьте мне!")
+    assert second.reply is None and second.actions == ["blocked_silent"]
+
+    third = bot.say("Ау, вы тут?")
+    assert third.reply is None and third.actions == ["blocked_silent"]
+
+
 def test_image_without_text_goes_to_the_operator(db: Session, make_conversation: Callable[..., Conversation]) -> None:
     bot = Bot(db, make_conversation(), ScriptedLLM())
 

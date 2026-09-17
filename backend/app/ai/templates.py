@@ -190,6 +190,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "working_hours": "Часы работы",
         "clarify": "Извините, не получилось понять сообщение. Уточните, пожалуйста, что вас интересует?",
         "voice_not_recognized": "Не получилось разобрать голосовое, напишите, пожалуйста, текстом.",
+        "blocked": "К сожалению, в данное время мы не можем принять Ваш заказ.",
     },
     TG: {
         "summary_title": "Лутфан, фармоишро санҷед:",
@@ -275,6 +276,7 @@ _TEXTS: dict[str, dict[str, str]] = {
         "working_hours": "Вақти корӣ",
         "clarify": "Бубахшед, паёмро нафаҳмидем. Лутфан, аниқ нависед, ки чӣ лозим аст?",
         "voice_not_recognized": "Паёми овозиро фаҳмида натавонистем, лутфан, бо матн нависед.",
+        "blocked": "Мутаассифона, дар айни замон мо наметавонем фармоиши шуморо қабул кунем.",
     },
 }
 
@@ -690,6 +692,7 @@ _RENDERERS: dict[str, Callable[[Mapping[str, Any], Sequence[str], str], str]] = 
     "NEED_MANAGER": _simple("need_manager"),
     "UNKNOWN_PRODUCT": _unknown_product,
     "CLARIFY": _simple("clarify"),
+    "BLOCKED": _simple("blocked"),
 }
 
 

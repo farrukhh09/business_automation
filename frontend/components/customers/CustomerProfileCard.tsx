@@ -3,7 +3,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Switch } from "@/components/ui/Checkbox";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
@@ -34,6 +36,7 @@ interface FormState {
   phone: string;
   language: Language;
   notes: string;
+  isBlocked: boolean;
 }
 
 function toFormState(customer: CustomerDetail): FormState {
@@ -42,6 +45,7 @@ function toFormState(customer: CustomerDetail): FormState {
     phone: customer.phone ?? "",
     language: customer.language,
     notes: customer.notes ?? "",
+    isBlocked: customer.is_blocked,
   };
 }
 
@@ -60,6 +64,7 @@ export function CustomerProfileCard({ customer, loading, error, onRetry }: Custo
         phone: body.phone.trim() || null,
         language: body.language,
         notes: body.notes.trim() || null,
+        is_blocked: body.isBlocked,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.customers.all });
@@ -140,6 +145,12 @@ export function CustomerProfileCard({ customer, loading, error, onRetry }: Custo
             error={fieldErrors.notes}
             rows={3}
           />
+          <Switch
+            checked={form.isBlocked}
+            onCheckedChange={(checked) => setForm({ ...form, isBlocked: checked })}
+            label="Заблокирован"
+            description="Бот один раз ответит отказом и больше не будет отвечать этому клиенту."
+          />
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={cancelEditing} disabled={mutation.isPending}>
               Отмена
@@ -162,6 +173,19 @@ export function CustomerProfileCard({ customer, loading, error, onRetry }: Custo
               value: <EnumBadge value={customer.language} labels={LANGUAGE_LABELS} tones={LANGUAGE_TONES} />,
             },
             { key: "type", label: "Статус", value: <CustomerTypeBadge type={customer.customer_type} /> },
+            {
+              key: "is_blocked",
+              label: "Приём заказов",
+              value: customer.is_blocked ? (
+                <Badge tone="red" dot>
+                  Заблокирован
+                </Badge>
+              ) : (
+                <Badge tone="green" dot>
+                  Открыт
+                </Badge>
+              ),
+            },
             { key: "orders_count", label: "Количество заказов", value: customer.orders_count },
             { key: "total_spent", label: "Сумма заказов", value: formatMoney(customer.total_spent) },
             { key: "last_order_at", label: "Последний заказ", value: formatDateTime(customer.last_order_at) },

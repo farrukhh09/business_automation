@@ -30,6 +30,7 @@ class Customer(TimestampMixin, Base):
         enum_type(Language, "language"), nullable=False, default=Language.RU, server_default=Language.RU.value
     )
     is_new: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=True, server_default=sa.text("true"))
+    is_blocked: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False, server_default=sa.text("false"))
     last_order_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     notes: Mapped[str | None] = mapped_column(sa.Text)
 
