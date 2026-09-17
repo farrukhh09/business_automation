@@ -18,6 +18,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.ai.small_talk import Greeting
 from app.services.formatting import format_amount, format_date_ru
 from app.services.phone import PHONE_EXAMPLE_INTERNATIONAL, PHONE_EXAMPLE_NATIONAL
 
@@ -38,6 +39,8 @@ LANGUAGES = (RU, TG)
 CURRENCY = {RU: "сомони", TG: "сомонӣ"}
 DEFAULT_UNIT_RU = "шт."
 UNIT_TG = "дона"
+#: Russian unit abbreviations of the catalog as said in a Tajik reply ("2 кор." → "2 қуттӣ").
+UNITS_TG = {"шт": UNIT_TG, "шт.": UNIT_TG, "кор": "қуттӣ", "кор.": "қуттӣ"}
 
 STATUS_LABELS: dict[str, dict[str, str]] = {
     RU: {
@@ -176,7 +179,12 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Номер телефона не получилось распознать. Напишите, пожалуйста, в формате "
             f"{PHONE_EXAMPLE_NATIONAL} или {PHONE_EXAMPLE_INTERNATIONAL}."
         ),
-        "greeting": "Здравствуйте! Чем можем помочь? 😊",
+        "greeting_salam": "Ва алейкум ассалом!",
+        "greeting_morning": "Доброе утро!",
+        "greeting_day": "Добрый день!",
+        "greeting_evening": "Добрый вечер!",
+        "greeting_hello": "Здравствуйте!",
+        "greeting_question": "Что желаете заказать? 😊",
         "small_talk_thanks": "Пожалуйста! Будем рады видеть вас снова 😊",
         "small_talk_goodbye": "Всего доброго! Пишите, если что-то понадобится.",
         "small_talk_ack": "Хорошо 👍 Если что-то понадобится — пишите.",
@@ -263,7 +271,12 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Рақами телефонро муайян карда натавонистем. Лутфан, дар шакли "
             f"{PHONE_EXAMPLE_NATIONAL} ё {PHONE_EXAMPLE_INTERNATIONAL} нависед."
         ),
-        "greeting": "Салом! Чӣ хизмат карда метавонем? 😊",
+        "greeting_salam": "Ва алейкум ассалом!",
+        "greeting_morning": "Субҳ ба хайр!",
+        "greeting_day": "Рӯз ба хайр!",
+        "greeting_evening": "Шом ба хайр!",
+        "greeting_hello": "Салом!",
+        "greeting_question": "Чӣ фармоиш додан мехоҳед? 😊",
         "small_talk_thanks": "Марҳамат! Боз интизори шумо ҳастем 😊",
         "small_talk_goodbye": "Хайр, рӯзи хуш! Агар чизе лозим шавад, нависед.",
         "small_talk_ack": "Хуб 👍 Агар чизе лозим шавад, нависед.",
@@ -331,9 +344,7 @@ def _text(value: Any) -> str:
 
 def _unit(unit: Any, language: str) -> str:
     text = _text(unit) or DEFAULT_UNIT_RU
-    if language == TG and text in ("шт", "шт."):
-        return UNIT_TG
-    return text
+    return UNITS_TG.get(text, text) if language == TG else text
 
 
 def _quoted(names: Sequence[Any]) -> str:
@@ -417,7 +428,7 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
 
 
 def _earliest(facts: Mapping[str, Any], language: str) -> str:
-    """"сегодня после 14:00" / "завтра после 14:00" / "18.09.2026 после 14:00" from the ``earliest_*`` facts."""
+    """ "сегодня после 14:00" / "завтра после 14:00" / "18.09.2026 после 14:00" from the ``earliest_*`` facts."""
     time_text = _text(facts.get("earliest_time"))
     if not time_text:
         return ""
@@ -506,7 +517,7 @@ def _confirmed(facts: Mapping[str, Any], missing_fields: Sequence[str], language
 
 
 def _price_lines(facts: Mapping[str, Any], language: str) -> list[str]:
-    """Prices asked for while ordering: "Торт «Медовик» — 220 сомони / шт." + the draft total when known."""
+    """Prices asked for while ordering: "Фисташковые синнамоны — 100 сомони / кор." + the draft total when known."""
     lines = []
     for product in facts.get("prices") or []:
         if not isinstance(product, Mapping):
@@ -586,7 +597,14 @@ def _with_reminder(body: str, facts: Mapping[str, Any], missing_fields: Sequence
 
 
 def _greeting(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
-    return _with_reminder(_t(language, "greeting"), facts, missing_fields, language)
+    """ "Добрый день! Что желаете заказать? 😊" — the customer's own greeting back (fact ``greeting``);
+    with an open draft its questions or the confirmation reminder take the place of the question."""
+    try:
+        greeting = Greeting(_text(facts.get("greeting")))
+    except ValueError:
+        greeting = Greeting.HELLO
+    reminder = _reminder(facts, missing_fields, language)
+    return f"{_t(language, f'greeting_{greeting.value}')} {reminder or _t(language, 'greeting_question')}"
 
 
 def _faq_answer(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -608,7 +626,8 @@ def _product_line(product: Mapping[str, Any], language: str) -> str:
     unit = _unit(product.get("unit"), language)
     line = f"{name} — {price} / {unit}" if price else name
     description = _text(product.get("description"))
-    return f"{line}. {description}" if description else line
+    # "/ кор." already ends with a period: "— 100 сомони / кор. Коробочка из 4…", not "кор.. Коробочка"
+    return f"{line.removesuffix('.')}. {description}" if description else line
 
 
 def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:

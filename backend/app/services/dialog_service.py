@@ -50,7 +50,7 @@ from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
 from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention
 from app.ai.responder import TEMPLATE_KINDS, Reply, ReplyKind, ReplyPlan, Responder
-from app.ai.small_talk import SmallTalk, detect_small_talk
+from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.ai.templates import MAX_QUESTIONS, render
 from app.ai.text_normalize import normalize_fold
 from app.ai.tools import ToolContext, ToolRegistry, product_view, tool_definitions
@@ -245,6 +245,8 @@ class DialogService:
         if outcome is not None:
             return outcome
         talk = detect_small_talk(turn.text)
+        if talk is SmallTalk.GREETING:
+            return self._greeting(turn, None, language)
         if talk is not SmallTalk.NONE:
             return self._small_talk(turn, talk.value, language)
 
@@ -544,9 +546,18 @@ class DialogService:
 
     # ------------------------------------------------------------------ informational intents
 
-    def _greeting(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
+    def _greeting(self, turn: _Turn, result: UnderstandingResult | None, language: str) -> DialogOutcome:
+        """The customer's greeting back, by template: "Добрый день! Что желаете заказать? 😊" (05 §6).
+
+        ``result`` is ``None`` for a bare greeting recognised without the model (step 3a). An open
+        draft keeps its questions: "Добрый день! На какую дату нужен заказ?".
+        """
+        greeting = detect_greeting(turn.text) or Greeting.HELLO
+        if result is None and turn.message is not None:
+            self._mark_processed(turn, {"greeting": greeting.value})
+            turn.message.intent = Intent.GREETING.value
         facts, fields = self._reminder(turn)
-        facts.update({"business_name": turn.business.business_name, "greeting": True})
+        facts["greeting"] = greeting.value
         return self._finish(turn, ReplyPlan(ReplyKind.GREETING, language, facts, fields))
 
     def _faq_first(self, turn: _Turn, result: UnderstandingResult) -> list[FaqItem]:

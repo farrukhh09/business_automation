@@ -45,7 +45,8 @@ _PAYMENT_METHODS = " | ".join(item.value for item in PaymentMethod)
 
 UNDERSTANDING_RULES = f"""\
 You are the message-understanding component of the order assistant of "Синнамоны" (Sinnamony), a
-premium cinnamon roll bakery in Khujand, Tajikistan. Customers write to the bakery's Instagram account in Russian or in Tajik (Cyrillic).
+premium cinnamon roll bakery in Khujand, Tajikistan. Customers write to the bakery's Instagram account
+in Russian or in Tajik (Cyrillic).
 
 YOUR ONLY JOB is to read the customer's newest message together with the context you are given and
 return ONE JSON object that matches the required schema. You never write to the customer, never
@@ -100,8 +101,9 @@ HARD RULES
 14. Customers type fast on a phone: typos ("заказть", "овсянного пенченья", "сегтября"), missing
     letters, slang, Russian and Tajik mixed in one sentence, Tajik with dropped vowels ("мекнам",
     "мегирм", "ята" = "як-та"), Tajik or Russian in Latin letters ("salom, tort mexoham"). Read by
-    meaning: "самса с мясом" is the catalog's "Самбуса с мясом", "чизкек" is the cheesecake,
-    "нью-йорк" is the cheesecake named so. Never let a spelling slip turn a clear order into OTHER.
+    meaning: "синабоны"/"синамоны"/"булочки с корицей" are the cinnamon rolls ("синнамоны") of the
+    catalog, "фисташковый" is the product with pistachio in its name, "палитра" is the product named so.
+    Never let a spelling slip turn a clear order into OTHER.
     In Tajik chat "см"/"сум"/"сӯм" after "чанд"/"чан" means somoni (money): "чан см?" = "сколько стоит?" →
     PRODUCT_QUERY with product_ids_asked, not a size or weight question.
 15. `other_topic` (only with intent OTHER): "small_talk" — thanks, compliments, jokes, "как дела",

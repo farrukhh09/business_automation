@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.ai.responder import ReplyKind
-from app.ai.small_talk import SmallTalk, detect_small_talk
+from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.integrations.maps.address import candidate_matches, geocode_queries, parse_address
 from app.integrations.maps.types import GeoCandidate, GeocodeResult, failed_result, rank_candidates
 from app.models.conversation import Conversation
@@ -178,9 +178,67 @@ def test_unclear_messages_still_hand_over_after_two_attempts(
     assert bot.say("ммм").handoff
 
 
+def test_bare_greeting_is_answered_in_kind_without_the_model(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    llm = ScriptedLLM()
+    bot = Bot(db, make_conversation(), llm)
+
+    outcome = bot.say("Добрый день")
+
+    assert outcome.reply.kind == ReplyKind.GREETING and not outcome.handoff
+    assert reply_text(outcome) == "Добрый день! Что желаете заказать? 😊"
+    db.refresh(bot.conversation)
+    message = bot.conversation.messages[-1]
+    assert message.ai_processed and message.intent == "GREETING"
+    assert reply_text(bot.say("Ассалому алейкум!")) == "Ва алейкум ассалом! Чӣ фармоиш додан мехоҳед? 😊"
+    assert reply_text(bot.say("Добрый вечер 🌸")) == "Добрый вечер! Что желаете заказать? 😊"
+    assert llm.json_calls == [] and llm.text_calls == []
+    db.refresh(bot.conversation)
+    assert bot.conversation.failed_ai_attempts == 0 and not bot.conversation.needs_attention
+
+
+@pytest.mark.usefixtures("pickup_settings")
+def test_greeting_at_the_summary_reminds_to_confirm(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    bot = Bot(db, make_conversation(), _pickup_llm(catalog["honey"]))
+    assert bot.say("Медовик").reply.kind == ReplyKind.ORDER_SUMMARY
+    order = bot.draft()
+
+    outcome = bot.say("Здравствуйте")
+
+    assert reply_text(outcome) == f"Здравствуйте! Чтобы подтвердить заказ №{order.id}, напишите «Да»."
+    assert bot.say("Да").reply.kind == ReplyKind.ORDER_CONFIRMED
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
+        ("Добрый день!", Greeting.DAY),
+        ("доброе утро", Greeting.MORNING),
+        ("Добрый вечер, есть синнамоны?", Greeting.EVENING),
+        ("Здравствуйте, добрый день", Greeting.DAY),
+        ("Ассалому алейкум", Greeting.SALAM),
+        ("Шом ба хайр", Greeting.EVENING),
+        ("Салом", Greeting.HELLO),
+        ("Хочу коробку классики", None),
+        (None, None),
+    ],
+)
+def test_greeting_detector(text: str | None, expected: Greeting | None) -> None:
+    assert detect_greeting(text) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Добрый день", SmallTalk.GREETING),
+        ("Здравствуйте всем!", SmallTalk.GREETING),
+        ("Рӯз ба хайр", SmallTalk.GREETING),
+        ("Здравствуйте, спасибо", SmallTalk.THANKS),
+        ("Добрый день, есть фисташковые?", SmallTalk.NONE),
+        ("Субҳ ба хайр, нарх?", SmallTalk.NONE),  # "ба" belongs to the greeting, it does not excuse "нарх"
         ("Спасибо большое!", SmallTalk.THANKS),
         ("рахмат", SmallTalk.THANKS),
         ("Понял, спасибо", SmallTalk.THANKS),

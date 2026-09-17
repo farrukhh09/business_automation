@@ -31,6 +31,7 @@ class FakeProduct:
     aliases: list[str] = field(default_factory=list)
     is_active: bool = True
     deleted_at: Any = None
+    unit: str = "шт."
 
 
 @pytest.fixture
@@ -187,6 +188,52 @@ def test_is_not_generic_mention(text: str) -> None:
 
 def test_unknown_named_cake_is_not_offered_as_a_category(matcher: ProductMatcher) -> None:
     assert matcher.match("пражский торт").status is MatchStatus.NONE
+
+
+# --------------------------------------------------------------------------- the cinnamon roll boxes (17.09.2026)
+
+
+@pytest.fixture
+def boxes() -> ProductMatcher:
+    return ProductMatcher(
+        [
+            FakeProduct(id=1, name="Классические синнамоны", aliases=["классика"], unit="кор."),
+            FakeProduct(id=2, name="Фисташковые синнамоны", aliases=["фисташка", "фисташковые"], unit="кор."),
+            FakeProduct(id=3, name="Ассорти «Палитра вкуса»", aliases=["ассорти", "ассорти синнамонов"], unit="кор."),
+            FakeProduct(id=4, name="Лимонад", aliases=["напиток"]),  # sold by the piece, not a box
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "text", ["синнамоны", "2 синнамона", "синабоны", "синамоны", "булочки с корицей", "хочу синнамоны на завтра"]
+)
+def test_cinnamon_rolls_as_a_category(boxes: ProductMatcher, text: str) -> None:
+    result = boxes.match(text)
+    assert result.status is MatchStatus.MULTIPLE, result
+    assert result.candidates == [1, 2, 3]
+    assert is_generic_mention(text) is True
+
+
+@pytest.mark.parametrize("text", ["коробка", "2 коробки", "коробочку", "3 коробочки на завтра"])
+def test_a_box_means_the_products_sold_by_the_box(boxes: ProductMatcher, text: str) -> None:
+    # "2 коробки" is a question "which ones?", never "we do not have «коробки»"
+    result = boxes.match(text)
+    assert result.status is MatchStatus.MULTIPLE, result
+    assert result.candidates == [1, 2, 3]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_id"),
+    [("коробочку фисташковых", 2), ("фисташковых", 2), ("классику", 1), ("ассорти", 3), ("синнамоны классика", 1)],
+)
+def test_a_named_flavour_is_one_product(boxes: ProductMatcher, text: str, expected_id: int) -> None:
+    result = boxes.match(text)
+    assert result.product_id == expected_id, result
+
+
+def test_cakes_are_not_offered_from_a_cinnamon_catalog(boxes: ProductMatcher) -> None:
+    assert boxes.match("2 торта").status is MatchStatus.NONE
 
 
 def test_works_with_orm_like_objects() -> None:

@@ -119,6 +119,9 @@ CASES: list[tuple[str | None, ConfirmationDecision]] = [
     ("да, но добавьте ещё медовик", CHANGE),
     ("Да, давайте на 18:00", CHANGE),
     ("да, 2 торта", CHANGE),
+    ("Да, но фисташковые", CHANGE),  # a flavour of the cinnamon rolls is a detail, not a plain "да"
+    ("да, коробочку ягодных", CHANGE),
+    ("нет, лучше ассорти", CHANGE),
     ("нет, время другое", CHANGE),
     ("нет, лучше завтра", CHANGE),
     ("поменяйте время на 19:00", CHANGE),

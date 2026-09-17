@@ -10,8 +10,9 @@ The LLM may return a ``product_id``, but it may also return only ``product_text`
 Matching stages (first hit wins):
 
 1. **Exact** — the normalized + Tajik-folded text equals a product name or alias.
-2. **Generic category word** — "торт", "торты", "пирожное", "десерт", "торти": all products
-   whose name or aliases contain that stem (``NONE`` when the catalog has none).
+2. **Generic category word** — "торт", "торты", "пирожное", "десерт", "торти", "синнамоны",
+   "синабоны": all products whose name or aliases contain that stem or its synonym (``NONE`` when the
+   catalog has none); "2 коробки" — all products sold by the box (unit "кор.").
 3. **Fuzzy** — containment ("медовик" inside "хочу медовик на завтра", "бархат" inside
    "Красный бархат"), token coverage, and ``difflib`` ratio ≥ :data:`FUZZY_THRESHOLD` for
    typos.  Candidates within :data:`CANDIDATE_MARGIN` of the best score are all reported, so a
@@ -74,8 +75,37 @@ CANDIDATE_MARGIN = 0.05
 #: Fuzzy matching is not attempted for very short texts ("ок" must not become "сок").
 MIN_FUZZY_LENGTH = 3
 
-#: Category words that name a whole group rather than a product (RU + TG "торти", "ширинӣ").
-CATEGORY_STEMS = ("торт", "пирожн", "десерт", "выпечк", "сладост", "кекс", "капкейк", "чизкейк", "ширин")
+#: Category words that name a whole group rather than a product (RU + TG "торти", "ширинӣ"; the
+#: cinnamon rolls with their usual spellings; "коробка" — see :data:`PACKAGING_UNITS`).
+CATEGORY_STEMS = (
+    "торт",
+    "пирожн",
+    "десерт",
+    "выпечк",
+    "сладост",
+    "кекс",
+    "капкейк",
+    "чизкейк",
+    "ширин",
+    "синнамон",
+    "синамон",
+    "синнабон",
+    "синабон",
+    "булочк",
+    "кориц",
+    "короб",
+)
+#: A category word also finds the products named with its synonym: "синабоны" and "булочки с корицей"
+#: are the "синнамоны" of the catalog.
+CATEGORY_SYNONYMS = {
+    "синамон": "синнамон",
+    "синнабон": "синнамон",
+    "синабон": "синнамон",
+    "булочк": "синнамон",
+    "кориц": "синнамон",
+}
+#: A packaging word asks for the products sold in it: "2 коробки" → every product with the unit "кор.".
+PACKAGING_UNITS = {"короб": "кор"}
 
 # Words around a category word that carry no product information ("хочу 2 торта на завтра").
 _MENTION_STOPWORDS = frozenset(
@@ -185,6 +215,7 @@ class _Entry:
     keys: tuple[str, ...]
     key_tokens: tuple[tuple[str, ...], ...]
     haystack: str
+    unit: str
 
 
 def _attribute(product: Any, name: str, default: Any = None) -> Any:
@@ -247,6 +278,7 @@ class ProductMatcher:
                     keys=keys,
                     key_tokens=tuple(tuple(key.split()) for key in keys),
                     haystack=" ".join(keys),
+                    unit=normalize_fold(_attribute(product, "unit", None)),
                 )
             )
 
@@ -274,8 +306,12 @@ class ProductMatcher:
 
     def _match_category(self, query_tokens: list[str]) -> MatchResult:
         stems = {stem for stem in CATEGORY_STEMS for token in query_tokens if token.startswith(stem)}
+        names = stems | {CATEGORY_SYNONYMS[stem] for stem in stems if stem in CATEGORY_SYNONYMS}
+        units = {PACKAGING_UNITS[stem] for stem in stems if stem in PACKAGING_UNITS}
         candidates = [
-            entry.product_id for entry in self._entries if any(stem in entry.haystack for stem in stems)
+            entry.product_id
+            for entry in self._entries
+            if any(stem in entry.haystack for stem in names) or any(entry.unit.startswith(unit) for unit in units)
         ]
         if not candidates:
             return MatchResult(MatchStatus.NONE)

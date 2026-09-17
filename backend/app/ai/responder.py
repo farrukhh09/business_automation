@@ -3,8 +3,8 @@
 ``DialogService`` decides *what* to say (the plan: kind, language, facts from the database, missing
 fields); this module only decides *how* it is worded:
 
-- kinds in ``TEMPLATE_KINDS`` (summary, confirmation, cancellation, handoff, map link…) are always
-  rendered by ``app.ai.templates`` — their numbers and their meaning must never depend on a model;
+- kinds in ``TEMPLATE_KINDS`` (greeting, summary, confirmation, cancellation, handoff, map link…) are
+  always rendered by ``app.ai.templates`` — their numbers and their meaning must never depend on a model;
 - every other kind is worded by the LLM (``complete_text``) under the reply system prompt, then
   checked by ``ResponseGuard`` (money only from FACTS, no confirmation claims, no invented stock or
   discounts, no catalog product outside FACTS) and by a language check. Any LLM error, an empty
@@ -66,6 +66,7 @@ class ReplyKind(StrEnum):
 #: 05 §6: "Всегда шаблоном (без LLM)".
 TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
     {
+        ReplyKind.GREETING,  # the bakery's own wording: "Добрый день! Что желаете заказать?"
         ReplyKind.ORDER_SUMMARY,
         ReplyKind.ORDER_CONFIRMED,
         ReplyKind.CONFIRMATION_REPEAT,

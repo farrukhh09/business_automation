@@ -6,8 +6,12 @@ Usage (from ``backend/``, after ``alembic upgrade head``)::
 
 Products and FAQ items are matched by name / question: existing rows are left as they are, so the
 script never overwrites what was edited in the admin panel. Business settings are filled only where
-the stored value is still empty. The data is invented for testing — replace it with the real
-catalog before going live.
+the stored value is still empty.
+
+The catalog is the bakery's own, from its Instagram (17.09.2026): cinnamon rolls sold in boxes of 4 —
+five flavours and the assorted box «Палитра вкуса». The prices are NOT: the posts show none, so every
+box costs a temporary 100 сомони for testing (said in the description) until the owner sets the real
+prices in the admin panel («Товары»). Settings and the pickup address are still invented test data.
 """
 
 import sys
@@ -24,75 +28,121 @@ from app.services.product_service import ProductService
 from app.services.settings_service import SettingsService
 from scripts.faq_data import FAQ
 
+#: Temporary test price of a box — the Instagram posts name no prices (see the module docstring).
+TEST_PRICE = Decimal("100")
+TEST_PRICE_NOTE = "Цена временная — для теста."
+BOX_UNIT = "кор."
+
+
+def _box(name: str, description: str, aliases: list[str]) -> dict[str, Any]:
+    """A box of 4 cinnamon rolls at the temporary test price."""
+    return {
+        "name": name,
+        "description": f"{description} {TEST_PRICE_NOTE}",
+        "price": TEST_PRICE,
+        "unit": BOX_UNIT,
+        "aliases": aliases,
+    }
+
+
 PRODUCTS: list[dict[str, Any]] = [
-    {
-        "name": "Торт «Медовик»",
-        "description": "Медовые коржи со сметанным кремом, 1,5 кг",
-        "price": Decimal("220"),
-        "aliases": ["медовик", "медовый торт", "торти асалӣ"],
-    },
-    {
-        "name": "Торт «Наполеон»",
-        "description": "Слоёные коржи с заварным кремом, 1,5 кг",
-        "price": Decimal("200"),
-        "aliases": ["наполеон", "торти наполеон"],
-    },
-    {
-        "name": "Торт «Красный бархат»",
-        "description": "Бисквит red velvet с крем-чизом, 1,5 кг",
-        "price": Decimal("280"),
-        "aliases": ["красный бархат", "red velvet", "ред вельвет"],
-    },
-    {
-        "name": "Торт «Молочная девочка»",
-        "description": "Тонкие сгущёночные коржи со сливочным кремом, 1,5 кг",
-        "price": Decimal("250"),
-        "aliases": ["молочная девочка"],
-    },
-    {
-        "name": "Чизкейк «Нью-Йорк»",
-        "description": "Классический запечённый чизкейк, 1,2 кг",
-        "price": Decimal("260"),
-        "aliases": ["чизкейк", "нью-йорк", "cheesecake"],
-    },
-    {
-        "name": "Эклер",
-        "description": "С заварным кремом",
-        "price": Decimal("10"),
-        "aliases": ["эклеры", "эклер с кремом"],
-    },
-    {
-        "name": "Капкейк",
-        "description": "Ванильный или шоколадный, со сливочной шапкой",
-        "price": Decimal("15"),
-        "aliases": ["капкейки", "кекс с кремом"],
-    },
-    {
-        "name": "Круассан с шоколадом",
-        "description": "Слоёное масляное тесто",
-        "price": Decimal("14"),
-        "aliases": ["круассан", "круассаны"],
-    },
-    {
-        "name": "Самбуса с мясом",
-        "description": "Слоёная, из тандыра",
-        "price": Decimal("8"),
-        "aliases": ["самбуса", "самбӯса"],
-    },
-    {
-        "name": "Пахлава",
-        "description": "С грецким орехом и мёдом",
-        "price": Decimal("90"),
-        "unit": "кг",
-        "aliases": ["пахлава", "баклава"],
-    },
-    {
-        "name": "Овсяное печенье",
-        "description": "Упаковка 500 г",
-        "price": Decimal("35"),
-        "unit": "уп.",
-        "aliases": ["печенье", "кулчақанд"],
-    },
+    _box(
+        "Классические синнамоны",
+        "Коробочка из 4 синнамонов с корицей и нежной глазурью.",
+        [
+            "классика",
+            "классические",
+            "классический",
+            "классических",
+            "классическую",
+            "классику",
+            "синнамоны классика",
+            "коробочка классика",
+            "классикӣ",
+        ],
+    ),
+    _box(
+        "Шоколадные синнамоны",
+        "Коробочка из 4 синнамонов с шоколадным соусом и глазурью.",
+        [
+            "шоколад",
+            "шоколадные",
+            "шоколадный",
+            "шоколадных",
+            "шоколадную",
+            "с шоколадом",
+            "синнамоны шоколад",
+            "коробочка шоколад",
+            "шоколадӣ",
+            "бо шоколад",
+        ],
+    ),
+    _box(
+        "Ягодные синнамоны",
+        "Коробочка из 4 синнамонов с ягодным соусом и глазурью.",
+        [
+            "ягоды",
+            "ягодные",
+            "ягодный",
+            "ягодных",
+            "ягодную",
+            "с ягодами",
+            "синнамоны ягоды",
+            "коробочка ягоды",
+            "буттамева",
+            "бо буттамева",
+        ],
+    ),
+    _box(
+        "Фисташковые синнамоны",
+        "Коробочка из 4 синнамонов с фисташковым кремом и дроблёными фисташками.",
+        [
+            "фисташка",
+            "фисташки",
+            "фисташку",
+            "фисташковые",
+            "фисташковый",
+            "фисташковых",
+            "фисташковую",
+            "с фисташкой",
+            "синнамоны фисташка",
+            "коробочка фисташка",
+            "писта",
+            "пистагӣ",
+        ],
+    ),
+    _box(
+        "Яблочные синнамоны",
+        "Коробочка из 4 синнамонов с сочными яблоками и корицей.",
+        [
+            "яблоко",
+            "яблоки",
+            "яблочные",
+            "яблочный",
+            "яблочных",
+            "яблочную",
+            "с яблоками",
+            "синнамоны яблоко",
+            "коробочка яблоко",
+            "себӣ",
+            "бо себ",
+        ],
+    ),
+    _box(
+        "Ассорти «Палитра вкуса»",
+        "4 вкуса в одной коробочке: классика, шоколад, ягоды и фисташка.",
+        [
+            "ассорти",
+            "палитра",
+            "палитра вкуса",
+            "микс",
+            "разные вкусы",
+            "4 вкуса",
+            "ассорти синнамонов",
+            "коробочка ассорти",
+            "омехта",
+        ],
+    ),
 ]
 
 BUSINESS_SETTINGS: dict[str, Any] = {

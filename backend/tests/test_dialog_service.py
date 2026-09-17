@@ -544,7 +544,7 @@ def test_operator_request_hands_over_without_the_llm(
 def test_llm_failure_hands_over(db: Session, make_conversation: Callable[..., Conversation], error: Exception) -> None:
     bot = Bot(db, make_conversation(), ScriptedLLM(default=error))
 
-    outcome = bot.say("Здравствуйте")
+    outcome = bot.say("Сколько стоит медовик?")
 
     assert outcome.handoff
     # No "уточнить эту информацию": an AI outage says nothing about the customer's question.
@@ -563,7 +563,7 @@ def test_llm_not_configured_hands_over(db: Session, make_conversation: Callable[
     conversation = make_conversation()
     service = DialogService(db, llm_factory=factory)
 
-    outcome = service.handle_incoming(conversation, incoming(db, conversation, "Здравствуйте"))
+    outcome = service.handle_incoming(conversation, incoming(db, conversation, "Сколько стоит медовик?"))
 
     assert outcome.handoff
 
@@ -736,9 +736,12 @@ def test_order_message_asking_the_price_gets_prices_and_the_total(
 def test_greeting_does_not_use_faq_keywords(db: Session, make_conversation: Callable[..., Conversation]) -> None:
     db.add(FaqItem(question="Режим работы?", answer="С 9 до 20.", keywords=["здравствуйте"]))
     db.commit()
-    bot = Bot(db, make_conversation(), ScriptedLLM(default=understanding(intent="GREETING")))
+    llm = ScriptedLLM(default=understanding(intent="GREETING"))
+    bot = Bot(db, make_conversation(), llm)
 
-    assert reply_text(bot.say("Здравствуйте")) != "С 9 до 20."
+    # not a bare greeting, so the model is asked; GREETING is still answered by the template
+    assert reply_text(bot.say("Здравствуйте, девушки!")) == "Здравствуйте! Что желаете заказать? 😊"
+    assert len(llm.json_calls) == 1
 
 
 def test_unanswerable_question_needs_a_manager(db: Session, make_conversation: Callable[..., Conversation]) -> None:
@@ -829,7 +832,7 @@ def test_tools_are_offered_read_only(db: Session, make_conversation: Callable[..
     llm = ScriptedLLM(default=understanding(intent="GREETING"))
     bot = Bot(db, make_conversation(), llm)
 
-    bot.say("Салом")
+    bot.say("Салом, чӣ доред?")
 
     call = llm.json_calls[0]
     names = {tool["name"] for tool in call["tools"]}
@@ -966,17 +969,13 @@ def test_greeting_during_an_open_draft_repeats_the_questions(
 ) -> None:
     honey = catalog["honey"]
     llm = ScriptedLLM(
-        {
-            "2 медовика": understanding(intent="CREATE_ORDER", entities={"items": [item("медовик", 2, honey.id)]}),
-            "Привет": understanding(intent="GREETING"),
-        }
+        {"2 медовика": understanding(intent="CREATE_ORDER", entities={"items": [item("медовик", 2, honey.id)]})}
     )
     bot = Bot(db, make_conversation(), llm)
     bot.say("2 медовика")
 
     assert reply_text(bot.say("Привет")) == (
-        "Здравствуйте! Чем можем помочь? 😊\n\n"
-        "Уточните, пожалуйста:\n1. На какую дату нужен заказ?\n2. К какому времени?"
+        "Здравствуйте! Уточните, пожалуйста:\n1. На какую дату нужен заказ?\n2. К какому времени?"
     )
 
 

@@ -109,6 +109,42 @@ def test_small_talk_templates() -> None:
     )
 
 
+def test_greeting_template_answers_in_kind() -> None:
+    assert templates.render("GREETING", "ru", {"greeting": "day"}) == "Добрый день! Что желаете заказать? 😊"
+    assert templates.render("GREETING", "ru", {"greeting": "evening"}) == "Добрый вечер! Что желаете заказать? 😊"
+    assert templates.render("GREETING", "tg", {"greeting": "salam"}) == (
+        "Ва алейкум ассалом! Чӣ фармоиш додан мехоҳед? 😊"
+    )
+    assert templates.render("GREETING", "ru", {}) == "Здравствуйте! Что желаете заказать? 😊"
+    assert templates.render("GREETING", "ru", {"greeting": True}) == "Здравствуйте! Что желаете заказать? 😊"
+    # an open draft: its questions or the confirmation reminder replace "Что желаете заказать?"
+    assert templates.render("GREETING", "ru", {"greeting": "morning"}, ["phone"]) == (
+        "Доброе утро! Напишите, пожалуйста, номер телефона для связи."
+    )
+    assert templates.render("GREETING", "tg", {"greeting": "day", "confirmation_pending_order_id": 5}) == (
+        "Рӯз ба хайр! Барои тасдиқи фармоиши №5 «Ҳа» нависед."
+    )
+
+
+def test_product_lines_of_the_boxes() -> None:
+    box = {
+        "name": "Фисташковые синнамоны",
+        "price": "100.00",
+        "unit": "кор.",
+        "description": "Коробочка из 4 синнамонов.",
+    }
+    facts = {"products": [box], "asked_specific": True}
+    # one period after the unit abbreviation, not "кор.."
+    assert templates.render("PRODUCT_INFO", "ru", facts) == (
+        "Фисташковые синнамоны — 100 сомони / кор. Коробочка из 4 синнамонов."
+    )
+    assert templates.render("PRODUCT_INFO", "tg", facts) == (
+        "Фисташковые синнамоны — 100 сомонӣ / қуттӣ. Коробочка из 4 синнамонов."
+    )
+    summary = templates.render("ORDER_SUMMARY", "tg", {"items": [{**box, "quantity": 2}], "total": "200.00"})
+    assert "Фисташковые синнамоны — 2 қуттӣ" in summary
+
+
 def test_timing_notes_name_the_past_date_and_the_earliest_slot() -> None:
     past = templates.render(
         "ASK_MISSING", "ru", {"timing_problem": "delivery_date_past", "problem_date": "2026-08-05"}, ["delivery_date"]
@@ -199,8 +235,9 @@ def test_guard_violation_falls_back_to_the_template(llm_text: str, violation: st
 
 
 def test_llm_error_falls_back_to_the_template() -> None:
-    reply = Responder(ScriptedLLM()).generate_reply(ReplyPlan(ReplyKind.GREETING, "ru"))
-    assert reply.source == ReplySource.FALLBACK and reply.text == "Здравствуйте! Чем можем помочь? 😊"
+    reply = Responder(ScriptedLLM()).generate_reply(ReplyPlan(ReplyKind.CLARIFY, "ru"))
+    assert reply.source == ReplySource.FALLBACK
+    assert reply.text == "Извините, не получилось понять сообщение. Уточните, пожалуйста, что вас интересует?"
 
 
 @pytest.mark.parametrize(

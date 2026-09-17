@@ -42,7 +42,7 @@ def test_send_creates_a_conversation_and_a_reply_never_sent_anywhere(db: Session
     reply = messages[-1]
     assert reply.delivery_status == MessageDeliveryStatus.FAILED
     assert reply.error == NOT_SENT_NOTE
-    assert reply.text  # without an LLM key the dialog still hands off with a template reply
+    assert reply.text == "Здравствуйте! Что желаете заказать? 😊"  # a bare greeting needs no LLM key
 
 
 def test_a_fresh_customer_key_starts_a_separate_conversation(db: Session) -> None:
