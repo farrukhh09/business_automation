@@ -33,6 +33,11 @@ interface FormState {
   daily_report_time: string;
   payment_methods_text: string;
   delivery_info_text: string;
+  prepayment_enabled: boolean;
+  prepayment_percent: string;
+  prepayment_wallet: string;
+  prepayment_wallet_banks: string;
+  prepayment_auto_confirm: boolean;
 }
 
 function toFormState(settings: BusinessSettings): FormState {
@@ -55,6 +60,11 @@ function toFormState(settings: BusinessSettings): FormState {
     daily_report_time: settings.daily_report_time,
     payment_methods_text: settings.payment_methods_text,
     delivery_info_text: settings.delivery_info_text,
+    prepayment_enabled: settings.prepayment_enabled,
+    prepayment_percent: String(settings.prepayment_percent),
+    prepayment_wallet: settings.prepayment_wallet,
+    prepayment_wallet_banks: settings.prepayment_wallet_banks,
+    prepayment_auto_confirm: settings.prepayment_auto_confirm,
   };
 }
 
@@ -80,6 +90,11 @@ function toUpdateBody(form: FormState): BusinessSettingsUpdate {
     daily_report_time: form.daily_report_time,
     payment_methods_text: form.payment_methods_text,
     delivery_info_text: form.delivery_info_text,
+    prepayment_enabled: form.prepayment_enabled,
+    prepayment_percent: Number(form.prepayment_percent),
+    prepayment_wallet: form.prepayment_wallet.trim(),
+    prepayment_wallet_banks: form.prepayment_wallet_banks.trim(),
+    prepayment_auto_confirm: form.prepayment_auto_confirm,
   };
 }
 
@@ -148,6 +163,13 @@ export default function SettingsPage() {
     for (const [key, label] of numericFields) {
       const value = Number(form[key]);
       if (!form[key] || Number.isNaN(value) || value < 0) nextErrors[key] = `${label}: введите число ≥ 0`;
+    }
+    const percent = Number(form.prepayment_percent);
+    if (!form.prepayment_percent || Number.isNaN(percent) || percent < 1 || percent > 100) {
+      nextErrors.prepayment_percent = "Доля предоплаты: число от 1 до 100";
+    }
+    if (form.prepayment_enabled && !form.prepayment_wallet.trim()) {
+      nextErrors.prepayment_wallet = "Укажите номер кошелька, иначе бот не сможет попросить предоплату";
     }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
@@ -365,6 +387,57 @@ export default function SettingsPage() {
               value={form.delivery_info_text}
               onChange={(event) => update("delivery_info_text", event.target.value)}
               disabled={disabled}
+            />
+          </div>
+        </SectionCard>
+
+        <SectionCard
+          title="Предоплата"
+          description="После подтверждения заказа бот просит перевести предоплату на кошелёк и прислать чек; чек бот читает сам и сверяет сумму и номер кошелька"
+        >
+          <div className="flex flex-col gap-4">
+            <Switch
+              checked={form.prepayment_enabled}
+              onCheckedChange={(value) => update("prepayment_enabled", value)}
+              disabled={disabled}
+              label="Просить предоплату"
+              description="Выключено — бот про оплату ничего не просит, оплату отмечает сотрудник в заказе."
+            />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Input
+                label="Номер кошелька"
+                value={form.prepayment_wallet}
+                onChange={(event) => update("prepayment_wallet", event.target.value)}
+                disabled={disabled}
+                error={errors.prepayment_wallet}
+                hint="Например: +992 92 757 53 33"
+              />
+              <Input
+                label="Где принимается"
+                value={form.prepayment_wallet_banks}
+                onChange={(event) => update("prepayment_wallet_banks", event.target.value)}
+                disabled={disabled}
+                hint='Например: "Душанбе Сити, Алиф, Эсхата"'
+              />
+              <Input
+                label="Доля предоплаты, %"
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                value={form.prepayment_percent}
+                onChange={(event) => update("prepayment_percent", event.target.value)}
+                disabled={disabled}
+                error={errors.prepayment_percent}
+                hint="100 — полная оплата вперёд"
+              />
+            </div>
+            <Switch
+              checked={form.prepayment_auto_confirm}
+              onCheckedChange={(value) => update("prepayment_auto_confirm", value)}
+              disabled={disabled}
+              label="Отмечать оплату по чеку автоматически"
+              description="Выключено (рекомендуется): бот читает чек и пишет клиенту результат, а оплату в заказе подтверждает сотрудник после сверки в приложении банка. Включено: если сумма и кошелёк на чеке совпали, заказ сразу помечается оплаченным — скриншот можно подделать."
             />
           </div>
         </SectionCard>

@@ -32,6 +32,11 @@ CONTRACT_KEYS = {
     "daily_report_time",
     "payment_methods_text",
     "delivery_info_text",
+    "prepayment_enabled",
+    "prepayment_percent",
+    "prepayment_wallet",
+    "prepayment_wallet_banks",
+    "prepayment_auto_confirm",
 }
 
 
@@ -71,6 +76,10 @@ def test_defaults_when_nothing_stored(db: Session) -> None:
     assert settings.daily_report_time == time(21, 0)
     assert settings.payment_methods_text == ""
     assert settings.delivery_info_text == ""
+    # the prepayment policy is off until the owner switches it on in the admin panel (03 §3)
+    assert settings.prepayment_enabled is False and settings.prepayment_auto_confirm is False
+    assert settings.prepayment_percent == 100
+    assert settings.prepayment_wallet == "" and settings.prepayment_wallet_banks == ""
     assert _stored(db) is None
 
 

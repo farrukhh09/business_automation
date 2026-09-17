@@ -1064,6 +1064,16 @@ export interface BusinessSettings {
   daily_report_time: ISOTime;
   payment_methods_text: string;
   delivery_info_text: string;
+  /** Prepayment asked by the bot after the customer's "Да"; the receipt screenshot is read by the bot. */
+  prepayment_enabled: boolean;
+  /** 1..100 — share of the order total. */
+  prepayment_percent: number;
+  /** Wallet phone number (Dushanbe City / Alif / Эсхата). */
+  prepayment_wallet: string;
+  /** Apps the wallet is registered in, as shown to the customer. */
+  prepayment_wallet_banks: string;
+  /** Mark the order paid from a matching receipt without the operator (off by default). */
+  prepayment_auto_confirm: boolean;
 }
 
 /** `PUT /settings` accepts a partial update. */

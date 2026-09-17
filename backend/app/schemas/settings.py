@@ -77,6 +77,13 @@ class BusinessSettings(BaseModel):
     daily_report_time: HHMM = Field(default_factory=default_daily_report_time)
     payment_methods_text: str = Field(default="", max_length=LONG_TEXT_MAX)
     delivery_info_text: str = Field(default="", max_length=LONG_TEXT_MAX)
+    # Prepayment (03 §3, 17.09.2026): asked by the bot after the customer's "Да"; the receipt screenshot
+    # is read by the bot and checked in Python; the operator confirms unless auto-confirm is switched on.
+    prepayment_enabled: bool = False
+    prepayment_percent: int = Field(default=100, ge=1, le=100)
+    prepayment_wallet: str = Field(default="", max_length=SHORT_TEXT_MAX)
+    prepayment_wallet_banks: str = Field(default="", max_length=ADDRESS_MAX)
+    prepayment_auto_confirm: bool = False
 
 
 class WarehouseUpdate(BaseModel):
@@ -111,6 +118,11 @@ class BusinessSettingsUpdate(BaseModel):
     daily_report_time: HHMM | None = None
     payment_methods_text: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
     delivery_info_text: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    prepayment_enabled: bool | None = None
+    prepayment_percent: int | None = Field(default=None, ge=1, le=100)
+    prepayment_wallet: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)
+    prepayment_wallet_banks: str | None = Field(default=None, max_length=ADDRESS_MAX)
+    prepayment_auto_confirm: bool | None = None
 
 
 # --------------------------------------------------------------------------- integrations status

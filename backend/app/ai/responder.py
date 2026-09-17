@@ -64,6 +64,8 @@ class ReplyKind(StrEnum):
     CLARIFY = "CLARIFY"
     SMALL_TALK = "SMALL_TALK"  # thanks, goodbye, "ок", chat — worded by the LLM, template fallback
     BLOCKED = "BLOCKED"  # customer is blacklisted by staff — fixed refusal, sent once
+    ASK_RECEIPT = "ASK_RECEIPT"  # "оплатил" while a prepayment is awaited → "пришлите чек"
+    RECEIPT_RESULT = "RECEIPT_RESULT"  # what the bot read on the receipt and whether it fits the order
 
 
 #: 05 §6: "Всегда шаблоном (без LLM)".
@@ -80,6 +82,8 @@ TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
         ReplyKind.NEED_MANAGER,
         ReplyKind.ADDRESS_CLARIFY,
         ReplyKind.BLOCKED,
+        ReplyKind.ASK_RECEIPT,
+        ReplyKind.RECEIPT_RESULT,  # amounts and wallet numbers exactly as checked
     }
 )
 

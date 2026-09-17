@@ -20,6 +20,8 @@ from app.models.enums import (
     MessageDirection,
     MessageSender,
     MessageType,
+    OrderStatus,
+    PaymentStatus,
 )
 from app.services.inbound_service import InboundMessageService
 from app.services.media_storage import MediaStorage
@@ -33,6 +35,7 @@ from tests.bot_fakes import (
     InlineQueue,
     RecordingQueue,
     ScriptedLLM,
+    receipt_reading,
     throttling_error,
     transcript,
     understanding,
@@ -193,6 +196,32 @@ def test_image_is_stored_and_handed_to_the_operator(
     conversation = message.conversation
     assert conversation.mode == ConversationMode.HUMAN_HANDOFF and conversation.needs_attention
     assert messenger.texts == ["Передаю диалог менеджеру, он скоро ответит."]
+
+
+def test_receipt_image_is_read_when_a_prepayment_is_awaited(
+    db: Session, queue: InlineQueue, messenger: FakeMessenger, llm: ScriptedLLM, make_order: Any
+) -> None:
+    """End to end (03 §3): the stored file of the image is what the model reads; the reply is the receipt result."""
+    queue._inbound().handle_event(event(mid="mid.0"))  # creates the customer
+    customer = db.scalars(select(Customer)).one()
+    order = make_order(customer=customer, status=OrderStatus.CONFIRMED)  # 100 сомони, unpaid
+    SettingsService(db).update({"prepayment_enabled": True, "prepayment_wallet": "+992 92 757 53 33"})
+    messenger.media, messenger.media_type = b"\x89PNGreceipt", "image/png"
+    llm.receipt = receipt_reading(amount=100)
+
+    result = queue._inbound().handle_event(
+        event(mid="mid.r", text=None, attachments=[{"type": "image", "url": "https://cdn.example/receipt.png"}])
+    )
+
+    message = db.get(Message, result.message_id)
+    assert message.ai_payload["receipt"]["ok"] is True
+    [call] = llm.receipt_calls
+    assert call[0]["content"][0]["source"]["media_type"] == "image/png"
+    conversation = message.conversation
+    assert conversation.mode == ConversationMode.AI and conversation.needs_attention
+    assert messenger.texts[-1].startswith("Чек получили, спасибо! Перевод 100 сомони.")
+    db.refresh(order)
+    assert order.payment_status == PaymentStatus.UNPAID
 
 
 # --------------------------------------------------------------------------- voice

@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from app.ai.gemini_client import GEMINI_API_URL, MIN_OUTPUT_TOKENS, GeminiLLMClient
-from app.ai.llm_client import LLMRefusalError, LLMUnavailableError, get_llm_client
+from app.ai.llm_client import LLMRefusalError, LLMUnavailableError, get_llm_client, image_block
 from app.core.config import Settings
 from app.core.exceptions import IntegrationNotConfiguredError
 from app.services.integration_status import llm_status
@@ -91,6 +91,18 @@ def test_json_request_shape_and_result() -> None:
     assert body["generationConfig"]["responseMimeType"] == "application/json"
     assert body["generationConfig"]["responseJsonSchema"] == SCHEMA
     assert "tools" not in body
+
+
+def test_image_blocks_become_inline_data() -> None:
+    """A receipt screenshot (05 §9) travels as ``inlineData`` next to the text part."""
+    client, recorder, _ = build(text_response('{"is_receipt": true}'))
+    messages = [{"role": "user", "content": [image_block("QUJD", "image/png"), {"type": "text", "text": "read"}]}]
+
+    assert client.complete_json(system=SYSTEM, messages=messages, schema=SCHEMA) == {"is_receipt": True}
+
+    assert recorder.body(0)["contents"] == [
+        {"role": "user", "parts": [{"inlineData": {"mimeType": "image/png", "data": "QUJD"}}, {"text": "read"}]}
+    ]
 
 
 def test_tool_round_returns_model_turn_verbatim_and_results_with_ids() -> None:

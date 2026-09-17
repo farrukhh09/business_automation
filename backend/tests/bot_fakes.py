@@ -81,12 +81,15 @@ class ScriptedLLM:
         *,
         default: dict[str, Any] | Exception | None = None,
         reply: str | Callable[[dict[str, Any]], str] | Exception | None = None,
+        receipt: dict[str, Any] | Exception | None = None,
     ) -> None:
         self.script = dict(script or {})
         self.default = default
         self.reply = reply
+        self.receipt = receipt  # what the model "reads" on an image (app/ai/receipt.py)
         self.json_calls: list[dict[str, Any]] = []
         self.text_calls: list[dict[str, Any]] = []
+        self.receipt_calls: list[list[dict[str, Any]]] = []
 
     def complete_json(
         self,
@@ -98,6 +101,13 @@ class ScriptedLLM:
         tool_executor: Any = None,
         max_tool_rounds: int = 3,
     ) -> dict[str, Any]:
+        if _has_image(messages):
+            self.receipt_calls.append(messages)
+            if self.receipt is None:
+                raise AssertionError("ScriptedLLM has no receipt reading")
+            if isinstance(self.receipt, Exception):
+                raise self.receipt
+            return json.loads(json.dumps(self.receipt))
         text = self.customer_text(messages)
         self.json_calls.append({"text": text, "messages": messages, "tools": tools, "tool_executor": tool_executor})
         answer = self.script.get(text, self.default)
@@ -127,6 +137,29 @@ class ScriptedLLM:
             if match:
                 return match.group(1)
         raise AssertionError("no customer message in the prompt")
+
+
+def _has_image(messages: list[dict[str, Any]]) -> bool:
+    content = messages[-1].get("content") if messages else None
+    return isinstance(content, list) and any(block.get("type") == "image" for block in content)
+
+
+def receipt_reading(**overrides: Any) -> dict[str, Any]:
+    """A model answer for a receipt screenshot: a completed 300 somoni transfer to the bakery's wallet."""
+    return {
+        "is_receipt": True,
+        "status": "success",
+        "amount": 300,
+        "currency": "TJS",
+        "recipient": "+992 92 *** 53 33",
+        "recipient_name": None,
+        "sender": None,
+        "provider": "Alif",
+        "paid_at": "17.09.2026 12:31",
+        "reference": "A1",
+        "confidence": 0.95,
+        **overrides,
+    }
 
 
 class FakeMessenger:

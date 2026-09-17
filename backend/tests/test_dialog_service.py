@@ -38,6 +38,7 @@ from app.services.dialog_state import (
     DialogState,
 )
 from app.services.location_service import LocationService
+from app.services.media_storage import MediaStorage
 from app.services.order_validator import TOO_SOON
 from app.services.settings_service import SettingsService
 from tests.bot_fakes import (
@@ -104,11 +105,18 @@ def incoming(db: Session, conversation: Conversation, text: str | None, **fields
 class Bot:
     """One conversation driven message by message."""
 
-    def __init__(self, db: Session, conversation: Conversation, llm: ScriptedLLM, geocoder: FakeGeocoder | None = None):
+    def __init__(
+        self,
+        db: Session,
+        conversation: Conversation,
+        llm: ScriptedLLM,
+        geocoder: FakeGeocoder | None = None,
+        media: MediaStorage | None = None,
+    ):
         self.db = db
         self.conversation = conversation
         self.llm = llm
-        self.service = DialogService(db, llm=llm, geocoder=geocoder or FakeGeocoder())
+        self.service = DialogService(db, llm=llm, geocoder=geocoder or FakeGeocoder(), media=media)
 
     def say(self, text: str | None, **fields: Any) -> DialogOutcome:
         message = incoming(self.db, self.conversation, text, **fields)

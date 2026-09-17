@@ -29,6 +29,9 @@ ACTIVE_ORDER_STATUSES: frozenset[OrderStatus] = frozenset(OrderStatus) - {
 # Placed and not finished yet: active orders that are no longer drafts.
 IN_PROGRESS_ORDER_STATUSES: frozenset[OrderStatus] = ACTIVE_ORDER_STATUSES - DRAFT_ORDER_STATUSES
 
+# Orders a prepayment receipt may belong to (03 §3): placed, not yet handed out.
+PREPAYMENT_ORDER_STATUSES: frozenset[OrderStatus] = IN_PROGRESS_ORDER_STATUSES
+
 # Bounding box of Tajikistan for coordinates entered by people (map pin, operator, courier):
 # (lat_min, lng_min, lat_max, lng_max). The public map endpoint (04 §13) uses the same box.
 TAJIKISTAN_BBOX: tuple[float, float, float, float] = (36.6, 67.3, 41.1, 75.2)

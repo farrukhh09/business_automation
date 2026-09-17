@@ -9,25 +9,45 @@ Deterministic: ``ScriptedLLM`` and ``FakeGeocoder`` only.
 
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.llm_client import LLMUnavailableError
 from app.ai.responder import ReplyKind
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.core import time as app_time
 from app.integrations.maps.address import candidate_matches, geocode_queries, parse_address
 from app.integrations.maps.types import GeoCandidate, GeocodeResult, failed_result, rank_candidates
-from app.models.conversation import Conversation
-from app.models.enums import ConversationMode, DeliveryType, GeocodeStatus, Language, OrderStatus
+from app.models.conversation import Conversation, Message
+from app.models.enums import (
+    ConversationMode,
+    DeliveryType,
+    GeocodeStatus,
+    Language,
+    MessageType,
+    OrderStatus,
+    PaymentMethod,
+    PaymentStatus,
+)
 from app.models.faq import FaqItem
 from app.models.order import Order
 from app.models.product import Product
-from app.services.dialog_service import ABANDON_REASON, DRAFT_ABANDON_HOURS
+from app.services.dialog_service import (
+    ABANDON_REASON,
+    AUTO_PAYMENT_NOTE,
+    DRAFT_ABANDON_HOURS,
+    REASON_IMAGE,
+    REASON_RECEIPT_UNREAD,
+)
 from app.services.dialog_state import AWAITING_CONFIRMATION, AWAITING_MISSING_FIELDS
 from app.services.geocoding_service import GeocodingService
 from app.services.location_service import LocationService
+from app.services.media_storage import MediaStorage
 from app.services.settings_service import SettingsService
 from tests.bot_fakes import (
     CITY_LAT,
@@ -37,6 +57,7 @@ from tests.bot_fakes import (
     ambiguous,
     future_day,
     item,
+    receipt_reading,
     single_house,
     understanding,
 )
@@ -1098,3 +1119,227 @@ def test_recipient_is_defaulted_on_every_path_to_the_summary(
 
     assert outcome.reply.kind == ReplyKind.ORDER_SUMMARY and not outcome.handoff
     assert bot.draft().delivery.recipient_name == "Алия"
+
+
+# --------------------------------------------------------------------------- prepayment and receipts (03 §3)
+
+WALLET = "+992 92 757 53 33"
+BANKS = "Душанбе Сити, Алиф, Эсхата"
+PREPAYMENT_REQUEST = (
+    f"Предоплата — 750 сомони: переведите, пожалуйста, на кошелёк {WALLET} ({BANKS}) и пришлите сюда чек — "
+    "скриншот перевода. Как только менеджер увидит оплату, заказ пойдёт в работу."
+)
+
+
+@pytest.fixture
+def prepayment(db: Session) -> None:
+    SettingsService(db).update(
+        {"prepayment_enabled": True, "prepayment_wallet": WALLET, "prepayment_wallet_banks": BANKS}
+    )
+
+
+@pytest.fixture
+def media(tmp_path: Path) -> MediaStorage:
+    return MediaStorage(tmp_path / "media")
+
+
+def _confirmed_order(db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], **deps):
+    """A confirmed pickup order for one Медовик (750 сомони) and the bot that took it."""
+    llm = deps.pop("llm", None) or _pickup_llm(catalog["honey"])
+    bot = Bot(db, make_conversation(), llm, **deps)
+    assert bot.say("Медовик").reply.kind == ReplyKind.ORDER_SUMMARY
+    order = bot.draft()
+    confirmed = bot.say("Да")
+    assert confirmed.reply.kind == ReplyKind.ORDER_CONFIRMED
+    return bot, order, confirmed
+
+
+def _send_image(bot: Bot, media: MediaStorage):
+    filename = media.save(b"\xff\xd8receipt", prefix="in", extension="jpg")
+    return bot.say(None, message_type=MessageType.IMAGE, media_url=MediaStorage.url_path(filename))
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_confirmation_asks_for_the_prepayment(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    bot, order, confirmed = _confirmed_order(db, catalog, make_conversation)
+
+    assert reply_text(confirmed).endswith(f"Итого: 750 сомони.\n\n{PREPAYMENT_REQUEST}")
+
+    # the wallet is named in the payment answer too
+    llm = ScriptedLLM(default=understanding(intent="PAYMENT_QUERY"))
+    answer = reply_text(Bot(db, make_conversation(), llm).say("Куда переводить?"))
+    assert answer == (
+        f"Предоплата: кошелёк {WALLET} ({BANKS}). После перевода пришлите, пожалуйста, чек — скриншот перевода."
+    )
+
+    # a share of the total: "Предоплата 50% — 375 сомони"
+    SettingsService(db).update({"prepayment_percent": 50})
+    _, _, half = _confirmed_order(db, catalog, make_conversation)
+    assert "Предоплата 50% — 375 сомони: переведите" in reply_text(half)
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_a_receipt_is_read_checked_and_left_to_the_operator(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750)
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    outcome = _send_image(bot, media)
+
+    assert outcome.reply.kind == ReplyKind.RECEIPT_RESULT and not outcome.handoff
+    assert reply_text(outcome) == (
+        "Чек получили, спасибо! Перевод 750 сомони. Менеджер сверит поступление и подтвердит оплату — "
+        f"заказ №{order.id} пойдёт в работу."
+    )
+    # the model saw the picture, not a text
+    [call] = llm.receipt_calls
+    [image, _] = call[0]["content"]
+    assert image["type"] == "image" and image["source"]["media_type"] == "image/jpeg"
+    # nothing is marked paid by the bot; the operator is alerted and reads the journal line
+    db.refresh(order)
+    assert order.payment_status == PaymentStatus.UNPAID
+    db.refresh(bot.conversation)
+    assert bot.conversation.needs_attention and bot.conversation.mode == ConversationMode.AI
+    comments = [event.comment for event in order.events if event.comment]
+    assert comments[-1].startswith("Чек из Instagram: 750.00 сомони, Alif, кошелёк совпадает")
+    message = db.scalars(select(Message).where(Message.message_type == MessageType.IMAGE)).one()
+    assert message.ai_processed and message.ai_payload["receipt"]["ok"] is True
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+@pytest.mark.parametrize(
+    ("overrides", "expected_text"),
+    [
+        (
+            {"amount": 500},
+            "Чек получили: 500 сомони, а предоплата по заказу №{order_id} — 750 сомони. Переведите, пожалуйста, "
+            f"ещё 250 сомони на кошелёк {WALLET} и пришлите чек.",
+        ),
+        (
+            {"amount": 750, "recipient": "+992 93 111 22 33"},
+            f"На чеке получатель +992 93 111 22 33, а наш кошелёк — {WALLET}. Проверьте, пожалуйста, перевод; "
+            "если деньги ушли не туда, напишите нам — менеджер поможет.",
+        ),
+        (
+            {"amount": 750, "status": "failed"},
+            "Похоже, перевод не прошёл — на чеке нет отметки об успешной оплате. Попробуйте, пожалуйста, "
+            "ещё раз и пришлите новый чек.",
+        ),
+        (
+            {"amount": None},
+            "Чек получили, но сумму на нём разобрать не удалось — менеджер проверит вручную и напишет вам.",
+        ),
+    ],
+)
+def test_receipt_problems_are_named_to_the_customer(
+    db: Session,
+    catalog: dict[str, Product],
+    make_conversation: Callable[..., Conversation],
+    media: MediaStorage,
+    overrides: dict[str, Any],
+    expected_text: str,
+) -> None:
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(**overrides)
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    outcome = _send_image(bot, media)
+
+    assert outcome.reply.kind == ReplyKind.RECEIPT_RESULT and not outcome.handoff
+    assert reply_text(outcome) == expected_text.format(order_id=order.id)
+    db.refresh(order)
+    assert order.payment_status == PaymentStatus.UNPAID
+    db.refresh(bot.conversation)
+    assert bot.conversation.needs_attention
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_pictures_that_are_not_receipts_still_go_to_the_operator(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(is_receipt=False, amount=None, confidence=0.9)
+    bot, _, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    outcome = _send_image(bot, media)
+
+    assert outcome.handoff
+    db.refresh(bot.conversation)
+    assert bot.conversation.handoff_reason == REASON_IMAGE
+
+    # the model could not read the picture at all: the operator gets it with the reason
+    llm.receipt = LLMUnavailableError(reason="timeout")
+    bot2, _, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    failed = _send_image(bot2, media)
+    assert failed.handoff
+    db.refresh(bot2.conversation)
+    assert bot2.conversation.handoff_reason == REASON_RECEIPT_UNREAD
+
+
+@pytest.mark.usefixtures("pickup_settings")
+def test_without_the_prepayment_policy_or_an_unpaid_order_an_image_is_just_an_image(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750)
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    assert _send_image(bot, media).handoff and llm.receipt_calls == []  # policy off: no reading at all
+
+    SettingsService(db).update({"prepayment_enabled": True, "prepayment_wallet": WALLET})
+    order.payment_status = PaymentStatus.PAID
+    bot.conversation.mode = ConversationMode.AI  # "Вернуть боту" after the first handoff
+    db.commit()
+    assert _send_image(bot, media).handoff and llm.receipt_calls == []  # already paid: nothing to check
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_auto_confirm_marks_the_order_paid_from_a_matching_receipt(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    SettingsService(db).update({"prepayment_auto_confirm": True})
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750)
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    outcome = _send_image(bot, media)
+
+    assert reply_text(outcome) == f"Спасибо, оплату 750 сомони получили ✅ Заказ №{order.id} в работе."
+    db.refresh(order)
+    assert order.payment_status == PaymentStatus.PAID and order.paid_amount == Decimal("750.00")
+    [payment] = order.payments
+    assert (payment.method, payment.note) == (PaymentMethod.TRANSFER, AUTO_PAYMENT_NOTE)
+    db.refresh(bot.conversation)
+    assert bot.conversation.needs_attention  # still shown to the operator for a bank-app check
+
+    # a receipt that does not fit never marks anything, even with auto-confirm on
+    llm.receipt = receipt_reading(amount=500)
+    bot2, order2, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    _send_image(bot2, media)
+    db.refresh(order2)
+    assert order2.payment_status == PaymentStatus.UNPAID
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_saying_paid_asks_for_the_receipt_without_the_model(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation)
+    calls = len(bot.llm.json_calls)
+
+    outcome = bot.say("Оплатил, проверьте")
+
+    assert outcome.reply.kind == ReplyKind.ASK_RECEIPT and len(bot.llm.json_calls) == calls
+    assert reply_text(outcome) == (
+        f"Спасибо! Пришлите, пожалуйста, чек — скриншот перевода на кошелёк {WALLET}, — и менеджер подтвердит "
+        f"оплату по заказу №{order.id}."
+    )
+
+    # without an order awaiting a prepayment the words go to the model as usual
+    llm = ScriptedLLM(default=understanding(intent="OTHER", other_topic="question"))
+    other = Bot(db, make_conversation(), llm).say("Оплатил")
+    assert other.reply.kind == ReplyKind.NEED_MANAGER and len(llm.json_calls) == 1

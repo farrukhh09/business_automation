@@ -402,6 +402,13 @@ class OrderService:
         self._log("order.updated", order, ActorType(actor_type), user, change_request=True)
         return order
 
+    def record_receipt(self, order: Order, note: str, actor_type: ActorType | str = ActorType.AI) -> Order:
+        """03 §3: a payment receipt the customer sent is journaled for the operator ("Чек из Instagram: …")."""
+        record_order_event(self.db, order, EVENT_UPDATED, {}, comment=(note or "").strip(), actor_type=actor_type)
+        self.db.commit()
+        self._log("order.receipt_received", order, ActorType(actor_type), None)
+        return order
+
     # ------------------------------------------------------------------ admin API
 
     def create_admin_order(self, data: OrderCreate, user: User) -> Order:

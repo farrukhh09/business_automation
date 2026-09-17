@@ -82,14 +82,23 @@ def _contents(messages: list[Block]) -> list[Block]:
         if isinstance(content, str):
             parts = [{"text": content}]
         else:
-            parts = [
-                {"text": block["text"]}
-                for block in content or ()
-                if isinstance(block, dict) and block.get("type") == "text" and block.get("text")
-            ]
+            parts = [part for part in (_part(block) for block in content or ()) if part is not None]
         if parts:
             contents.append({"role": role, "parts": parts})
     return contents
+
+
+def _part(block: Any) -> Block | None:
+    """One Anthropic-style content block → a Gemini part (text, or a base64 image as ``inlineData``)."""
+    if not isinstance(block, dict):
+        return None
+    if block.get("type") == "text" and block.get("text"):
+        return {"text": block["text"]}
+    if block.get("type") == "image":
+        source = block.get("source") or {}
+        if isinstance(source, dict) and source.get("type") == "base64" and source.get("data"):
+            return {"inlineData": {"mimeType": source.get("media_type") or "image/jpeg", "data": source["data"]}}
+    return None
 
 
 def _system_instruction(system: list[Block]) -> Block | None:

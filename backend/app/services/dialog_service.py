@@ -49,6 +49,7 @@ from app.ai.handoff import detect_operator_request
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
 from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention
+from app.ai.receipt import check_receipt, expected_prepayment, mentions_payment_done, read_receipt, receipt_note
 from app.ai.responder import Reply, ReplyKind, ReplyPlan, Responder, uses_template
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.ai.templates import MAX_QUESTIONS, render
@@ -84,6 +85,8 @@ from app.models.enums import (
     MessageSender,
     MessageType,
     OrderStatus,
+    PaymentKind,
+    PaymentMethod,
 )
 from app.models.faq import FaqItem
 from app.models.order import Order
@@ -110,6 +113,7 @@ from app.services.dialog_state import (
 )
 from app.services.geocoding_service import GeocodingService
 from app.services.location_service import LocationService
+from app.services.media_storage import MediaStorage, media_type_for
 from app.services.order_pricing import money
 from app.services.order_service import BOT_CANCELLABLE_STATUSES, OrderService
 from app.services.order_validator import (
@@ -139,6 +143,8 @@ REASON_COMPLAINT = "Жалоба клиента"
 REASON_AI_UNAVAILABLE = "AI-ассистент недоступен"
 REASON_NOT_UNDERSTOOD = "Бот не смог понять клиента"
 REASON_IMAGE = "Клиент прислал изображение"
+REASON_RECEIPT_UNREAD = "Клиент прислал чек об оплате, распознать его не удалось"
+AUTO_PAYMENT_NOTE = "По чеку из Instagram (отмечено ботом автоматически)"
 REASON_ORDER_LOCKED = "Клиент просит изменить заказ №{order_id}, который уже оформлен"
 REASON_CANCEL_LOCKED = "Клиент просит отменить заказ №{order_id}, который уже в работе"
 CANCEL_REASON = "Отменён клиентом в Instagram"
@@ -202,6 +208,7 @@ class DialogService:
         settings: Settings | None = None,
         use_tools: bool | None = None,
         llm_factory: Callable[[Settings], LLMClient] = get_llm_client,
+        media: MediaStorage | None = None,
     ) -> None:
         self.db = db
         self.settings = settings or get_settings()
@@ -209,6 +216,7 @@ class DialogService:
         self._llm_resolved = llm is not None
         self._llm_factory = llm_factory
         self._geocoder = geocoder
+        self._media = media
         self.use_tools = self.settings.LLM_TOOLS_ENABLED if use_tools is None else use_tools
         self.products = ProductRepository(db)
         self.orders = OrderRepository(db)
@@ -242,8 +250,12 @@ class DialogService:
             return blocked
 
         language = detect_language(turn.text, None, self._known_language(turn), self._catalog_phrases(turn))
-        if message.message_type == MessageType.IMAGE and not turn.text:
-            return self._handoff(turn, REASON_IMAGE, "image", language)
+        if message.message_type == MessageType.IMAGE:
+            outcome = self._receipt(turn, language)  # a prepayment receipt, when one is awaited (03 §3)
+            if outcome is not None:
+                return outcome
+            if not turn.text:
+                return self._handoff(turn, REASON_IMAGE, "image", language)
         if not turn.text:
             return self._finish(turn, ReplyPlan(ReplyKind.CLARIFY, language), reset_attempts=False)
         if detect_operator_request(turn.text):
@@ -261,6 +273,10 @@ class DialogService:
             return self._greeting(turn, None, language)
         if talk is not SmallTalk.NONE:
             return self._small_talk(turn, talk.value, language)
+        if mentions_payment_done(turn.text):
+            outcome = self._ask_receipt(turn, language)  # "оплатил" while a prepayment is awaited
+            if outcome is not None:
+                return outcome
 
         try:
             result = self._understand(turn)
@@ -653,11 +669,112 @@ class DialogService:
     def _payment_query(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
         methods = turn.business.payment_methods_text.strip() or None
         faq = [_faq_fact(item, language) for item in self._faq_items(result, turn.text)]
-        if methods is None and not faq:
+        prepayment = self._prepayment(turn)
+        if methods is None and not faq and prepayment is None:
             return self._need_manager(turn, language)
         facts, fields = self._reminder(turn)
-        facts.update({"payment_methods": methods, "faq": faq})
+        facts.update({"payment_methods": methods, "faq": faq, "prepayment": prepayment})
         return self._finish(turn, ReplyPlan(ReplyKind.PAYMENT_INFO, language, facts, fields))
+
+    # ------------------------------------------------------------------ prepayment and receipts (03 §3)
+
+    def _prepayment(self, turn: _Turn) -> dict[str, Any] | None:
+        """The wallet facts of the prepayment policy, or ``None`` while it is switched off."""
+        business = turn.business
+        wallet = business.prepayment_wallet.strip()
+        if not business.prepayment_enabled or not wallet:
+            return None
+        return {
+            "wallet": wallet,
+            "banks": business.prepayment_wallet_banks.strip() or None,
+            "percent": business.prepayment_percent,
+        }
+
+    def _awaiting_payment(self, turn: _Turn) -> Order | None:
+        """The placed order a prepayment (and so a receipt) may belong to."""
+        if self._prepayment(turn) is None:
+            return None
+        return self.orders.latest_awaiting_payment_for_customer(turn.customer.id)
+
+    def _receipt(self, turn: _Turn, language: str) -> DialogOutcome | None:
+        """An image while a prepayment is awaited: read as a receipt and checked against the order.
+
+        ``None`` means "not our case" (policy off, no such order, no stored file, not a receipt): the
+        picture goes to the operator exactly as before. The model only reads the screenshot; the
+        amount, the wallet and the status are compared here, and the order is marked paid only when
+        the owner switched ``prepayment_auto_confirm`` on — otherwise the operator confirms.
+        """
+        order = self._awaiting_payment(turn)
+        if order is None or turn.message is None:
+            return None
+        image = self._image_bytes(turn.message)
+        llm = self.llm
+        if image is None or llm is None:
+            return None
+        data, media_type = image
+        try:
+            reading = read_receipt(llm, data, media_type)
+        except LLMError as exc:
+            log_event(
+                logger,
+                "dialog.receipt_failed",
+                level=logging.WARNING,
+                conversation_id=turn.conversation.id,
+                reason=exc.reason,
+            )
+            return self._handoff(turn, REASON_RECEIPT_UNREAD, "receipt_unread", language)
+        business = turn.business
+        expected = expected_prepayment(order.total_amount, order.paid_amount, business.prepayment_percent)
+        verdict = check_receipt(reading, expected, business.prepayment_wallet)
+        self._mark_processed(turn, {"receipt": {"reading": reading.model_dump(mode="json"), **verdict.as_dict()}})
+        if "not_receipt" in verdict.problems:
+            return None
+        auto_paid = False
+        if verdict.ok and business.prepayment_auto_confirm and verdict.amount is not None:
+            self.order_service.payments.register_payment(
+                order,
+                PaymentKind.PAYMENT,
+                verdict.amount,
+                method=PaymentMethod.TRANSFER,
+                note=AUTO_PAYMENT_NOTE,
+                actor_type=ActorType.AI,
+            )
+            auto_paid = True
+            turn.actions.append("payment_registered")
+        self.order_service.record_receipt(order, receipt_note(reading, verdict, auto_paid=auto_paid))
+        turn.conversation.needs_attention = True  # the operator checks the bank app either way
+        turn.actions.append("receipt_checked")
+        facts: dict[str, Any] = {
+            "order_id": order.id,
+            "amount": f"{verdict.amount:.2f}" if verdict.amount is not None else None,
+            "expected": f"{verdict.expected:.2f}",
+            "shortfall": f"{verdict.shortfall:.2f}" if verdict.shortfall is not None else None,
+            "currency": reading.currency,
+            "recipient": reading.recipient,
+            "problems": list(verdict.problems),
+            "auto_paid": auto_paid,
+            **(self._prepayment(turn) or {}),
+        }
+        return self._finish(turn, ReplyPlan(ReplyKind.RECEIPT_RESULT, language, facts))
+
+    def _ask_receipt(self, turn: _Turn, language: str) -> DialogOutcome | None:
+        """ "Оплатил" / "перевёл" while a prepayment is awaited: the receipt is asked for, no model needed."""
+        order = self._awaiting_payment(turn)
+        if order is None:
+            return None
+        self._mark_processed(turn, {"payment_done": True})
+        turn.actions.append("receipt_requested")
+        facts = {"order_id": order.id, **(self._prepayment(turn) or {})}
+        return self._finish(turn, ReplyPlan(ReplyKind.ASK_RECEIPT, language, facts))
+
+    def _image_bytes(self, message: Message) -> tuple[bytes, str] | None:
+        """The stored file of an incoming image (``InboundMessageService`` downloads it right away)."""
+        filename = MediaStorage.filename_from_url(message.media_url)
+        if filename is None:
+            return None
+        media = self._media or MediaStorage(self.settings.media_root)
+        data = media.read(filename)
+        return (data, media_type_for(filename)) if data else None
 
     def _need_manager(self, turn: _Turn, language: str) -> DialogOutcome:
         """SPEC §40: "Мне нужно уточнить эту информацию у менеджера." + the operator is alerted."""
@@ -1026,6 +1143,7 @@ class DialogService:
             answers["working_hours"] = business.working_hours.strip() or None
         if Intent.PAYMENT_QUERY in intents:
             answers["payment_methods"] = business.payment_methods_text.strip() or None
+            answers["prepayment"] = self._prepayment(turn)
         answers = {key: value for key, value in answers.items() if value}
         if not answers:
             answers = {"need_manager": True}
@@ -1195,6 +1313,12 @@ class DialogService:
             "delivery_time": order.delivery_time.strftime("%H:%M") if order.delivery_time else None,
             "total": f"{money(order.total_amount):.2f}",
         }
+        prepayment = self._prepayment(turn)
+        if prepayment is not None:
+            # 03 §3: the wallet and the sum are asked for right after "Да"; the receipt comes back here.
+            expected = expected_prepayment(order.total_amount, order.paid_amount, prepayment["percent"])
+            if expected > 0:
+                facts["prepayment"] = {**prepayment, "amount": f"{expected:.2f}"}
         state.close_draft()
         turn.actions.append("order_confirmed")
         return self._finish(turn, ReplyPlan(ReplyKind.ORDER_CONFIRMED, language, facts))

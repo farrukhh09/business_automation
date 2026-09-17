@@ -208,6 +208,43 @@ _TEXTS: dict[str, dict[str, str]] = {
         "clarify": "Извините, не получилось понять сообщение. Уточните, пожалуйста, что вас интересует?",
         "voice_not_recognized": "Не получилось разобрать голосовое, напишите, пожалуйста, текстом.",
         "blocked": "К сожалению, в данное время мы не можем принять Ваш заказ.",
+        # prepayment and receipts (03 §3)
+        "prepayment_share": " {percent}%",
+        "prepayment_info": (
+            "Предоплата{share}: кошелёк {wallet}{banks}. После перевода пришлите, пожалуйста, чек — "
+            "скриншот перевода."
+        ),
+        "confirmed_prepayment": (
+            "Предоплата{share} — {amount}: переведите, пожалуйста, на кошелёк {wallet}{banks} и пришлите сюда чек — "
+            "скриншот перевода. Как только менеджер увидит оплату, заказ пойдёт в работу."
+        ),
+        "ask_receipt": (
+            "Спасибо! Пришлите, пожалуйста, чек — скриншот перевода на кошелёк {wallet}, — и менеджер подтвердит "
+            "оплату по заказу №{order_id}."
+        ),
+        "receipt_ok": (
+            "Чек получили, спасибо! Перевод {amount}. Менеджер сверит поступление и подтвердит оплату — "
+            "заказ №{order_id} пойдёт в работу."
+        ),
+        "receipt_auto_paid": "Спасибо, оплату {amount} получили ✅ Заказ №{order_id} в работе.",
+        "receipt_short": (
+            "Чек получили: {amount}, а предоплата по заказу №{order_id} — {expected}. Переведите, пожалуйста, "
+            "ещё {shortfall} на кошелёк {wallet} и пришлите чек."
+        ),
+        "receipt_wallet_mismatch": (
+            "На чеке получатель {recipient}, а наш кошелёк — {wallet}. Проверьте, пожалуйста, перевод; "
+            "если деньги ушли не туда, напишите нам — менеджер поможет."
+        ),
+        "receipt_failed": (
+            "Похоже, перевод не прошёл — на чеке нет отметки об успешной оплате. Попробуйте, пожалуйста, "
+            "ещё раз и пришлите новый чек."
+        ),
+        "receipt_amount_unknown": (
+            "Чек получили, но сумму на нём разобрать не удалось — менеджер проверит вручную и напишет вам."
+        ),
+        "receipt_currency": (
+            "На чеке сумма не в сомони ({currency}) — проверьте, пожалуйста, перевод; менеджер уточнит."
+        ),
     },
     TG: {
         "summary_title": "Лутфан, фармоишро санҷед:",
@@ -308,6 +345,43 @@ _TEXTS: dict[str, dict[str, str]] = {
         "clarify": "Бубахшед, паёмро нафаҳмидем. Лутфан, аниқ нависед, ки чӣ лозим аст?",
         "voice_not_recognized": "Паёми овозиро фаҳмида натавонистем, лутфан, бо матн нависед.",
         "blocked": "Мутаассифона, дар айни замон мо наметавонем фармоиши шуморо қабул кунем.",
+        # prepayment and receipts (03 §3)
+        "prepayment_share": " {percent}%",
+        "prepayment_info": (
+            "Пешпардохт{share}: ҳамён {wallet}{banks}. Пас аз интиқол, лутфан, чекро — скриншоти интиқолро — "
+            "фиристед."
+        ),
+        "confirmed_prepayment": (
+            "Пешпардохт{share} — {amount}: лутфан, ба ҳамён {wallet}{banks} интиқол диҳед ва чекро — скриншоти "
+            "интиқолро — ба ин ҷо фиристед. Ҳамин ки менеҷер пардохтро бинад, фармоиш ба кор меравад."
+        ),
+        "ask_receipt": (
+            "Ташаккур! Лутфан, чекро — скриншоти интиқол ба ҳамёни {wallet} — фиристед, ва менеҷер пардохти "
+            "фармоиши №{order_id}-ро тасдиқ мекунад."
+        ),
+        "receipt_ok": (
+            "Чекро гирифтем, ташаккур! Интиқол {amount}. Менеҷер расидани маблағро месанҷад ва пардохтро тасдиқ "
+            "мекунад — фармоиши №{order_id} ба кор меравад."
+        ),
+        "receipt_auto_paid": "Ташаккур, пардохти {amount} гирифта шуд ✅ Фармоиши №{order_id} дар кор аст.",
+        "receipt_short": (
+            "Чекро гирифтем: {amount}, аммо пешпардохти фармоиши №{order_id} — {expected}. Лутфан, боз {shortfall} "
+            "ба ҳамёни {wallet} интиқол диҳед ва чекро фиристед."
+        ),
+        "receipt_wallet_mismatch": (
+            "Дар чек гиранда {recipient} аст, аммо ҳамёни мо — {wallet}. Лутфан, интиқолро санҷед; агар пул ба ҷои "
+            "дигар рафта бошад, ба мо нависед — менеҷер кӯмак мекунад."
+        ),
+        "receipt_failed": (
+            "Гӯё интиқол нагузаштааст — дар чек аломати пардохти муваффақ нест. Лутфан, бори дигар кӯшиш кунед ва "
+            "чеки навро фиристед."
+        ),
+        "receipt_amount_unknown": (
+            "Чекро гирифтем, аммо маблағро хонда натавонистем — менеҷер дастӣ месанҷад ва ба шумо менависад."
+        ),
+        "receipt_currency": (
+            "Дар чек маблағ бо сомонӣ нест ({currency}) — лутфан, интиқолро санҷед; менеҷер аниқ мекунад."
+        ),
     },
 }
 
@@ -517,7 +591,27 @@ def _answers(facts: Mapping[str, Any], language: str) -> str:
         parts.append(f"{_t(language, 'working_hours')}: {_text(answers.get('working_hours'))}")
     if _text(answers.get("payment_methods")):
         parts.append(_text_block(answers.get("payment_methods")))
+    parts.append(_prepayment_info(answers.get("prepayment"), language))
     return _paragraphs(*parts)
+
+
+def _prepayment_values(prepayment: Mapping[str, Any], language: str) -> dict[str, str]:
+    """``{share, wallet, banks, amount}`` for the prepayment texts: " 50%" / "" and " (Алиф, Эсхата)" / ""."""
+    percent = _text(prepayment.get("percent"))
+    banks = _text(prepayment.get("banks"))
+    return {
+        "share": _t(language, "prepayment_share", percent=percent) if percent and percent != "100" else "",
+        "wallet": _text(prepayment.get("wallet")),
+        "banks": f" ({banks})" if banks else "",
+        "amount": _money(prepayment.get("amount"), language) or "",
+    }
+
+
+def _prepayment_info(prepayment: Any, language: str) -> str:
+    """ "Предоплата: кошелёк +992 … (Душанбе Сити, Алиф, Эсхата). После перевода пришлите чек." (``prepayment``)."""
+    if not isinstance(prepayment, Mapping) or not _text(prepayment.get("wallet")):
+        return ""
+    return _t(language, "prepayment_info", **_prepayment_values(prepayment, language))
 
 
 def _greeting_line(facts: Mapping[str, Any], language: str) -> str:
@@ -588,7 +682,12 @@ def _confirmed(facts: Mapping[str, Any], missing_fields: Sequence[str], language
     total = _money(facts.get("total"), language)
     if total:
         lines.append(f"{_t(language, 'total')}: {total}.")
-    return "\n".join(lines)
+    prepayment = facts.get("prepayment")
+    request = ""
+    if isinstance(prepayment, Mapping) and _text(prepayment.get("wallet")) and _text(prepayment.get("amount")):
+        # 03 §3: the wallet and the sum right after "Да"; the receipt comes back into the same dialog.
+        request = _t(language, "confirmed_prepayment", **_prepayment_values(prepayment, language))
+    return _paragraphs("\n".join(lines), request)
 
 
 # --------------------------------------------------------------------------- kinds
@@ -768,8 +867,46 @@ def _delivery_info(facts: Mapping[str, Any], missing_fields: Sequence[str], lang
 
 
 def _payment_info(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
-    body = _paragraphs(_text_block(facts.get("payment_methods")), *_faq_block(facts)) or _t(language, "need_manager")
+    body = _paragraphs(
+        _text_block(facts.get("payment_methods")),
+        _prepayment_info(facts.get("prepayment"), language),
+        *_faq_block(facts),
+    ) or _t(language, "need_manager")
     return _with_reminder(body, facts, missing_fields, language)
+
+
+def _ask_receipt(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    return _t(language, "ask_receipt", order_id=_order_id(facts), wallet=_text(facts.get("wallet")))
+
+
+def _receipt_result(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    """What the bot read on the receipt (03 §3): one message per outcome, the worst problem first."""
+    problems = [str(problem) for problem in facts.get("problems") or []]
+    if "status" in problems:
+        key = "receipt_failed"
+    elif "currency" in problems:
+        key = "receipt_currency"
+    elif "wallet_mismatch" in problems:
+        key = "receipt_wallet_mismatch"
+    elif "amount_unknown" in problems:
+        key = "receipt_amount_unknown"
+    elif "amount_short" in problems:
+        key = "receipt_short"
+    elif facts.get("auto_paid"):
+        key = "receipt_auto_paid"
+    else:
+        key = "receipt_ok"
+    return _t(
+        language,
+        key,
+        order_id=_order_id(facts),
+        amount=_money(facts.get("amount"), language) or "",
+        expected=_money(facts.get("expected"), language) or "",
+        shortfall=_money(facts.get("shortfall"), language) or "",
+        wallet=_text(facts.get("wallet")),
+        recipient=_text(facts.get("recipient")) or "—",
+        currency=_text(facts.get("currency")) or "?",
+    )
 
 
 def _simple(key: str) -> Callable[[Mapping[str, Any], Sequence[str], str], str]:
@@ -801,6 +938,8 @@ _RENDERERS: dict[str, Callable[[Mapping[str, Any], Sequence[str], str], str]] = 
     "UNKNOWN_PRODUCT": _unknown_product,
     "CLARIFY": _simple("clarify"),
     "BLOCKED": _simple("blocked"),
+    "ASK_RECEIPT": _ask_receipt,
+    "RECEIPT_RESULT": _receipt_result,
 }
 
 

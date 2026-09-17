@@ -109,7 +109,7 @@ class InboundMessageService:
         self.queue = queue or get_task_queue()
         self.conversations = ConversationService(db, queue=self.queue, settings=self.settings)
         self.messaging = MessagingService(db, settings=self.settings, media=self.media)
-        self.dialog = DialogService(db, llm=llm, geocoder=geocoder, settings=self.settings)
+        self.dialog = DialogService(db, llm=llm, geocoder=geocoder, settings=self.settings, media=self.media)
         self._messenger = messenger
         self._owned_messenger: InstagramClient | None = None
         self._stt = stt

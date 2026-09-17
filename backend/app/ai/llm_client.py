@@ -58,10 +58,16 @@ TOOL_RESULT_CHARS = 8_000
 
 STAGE_UNDERSTANDING = "understanding"
 STAGE_REPLY = "reply"
+STAGE_RECEIPT = "receipt"  # a payment receipt screenshot read into JSON (app/ai/receipt.py)
 
 # Prompt/message types: plain dicts, exactly as they are sent to the API.
 Block = dict[str, Any]
 ToolExecutor = Callable[[str, dict[str, Any]], Any]
+
+
+def image_block(data_base64: str, media_type: str) -> Block:
+    """An image inside a user message, in the Anthropic shape; the Gemini adapter converts it."""
+    return {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": data_base64}}
 
 
 class LLMError(IntegrationError):
@@ -504,6 +510,9 @@ __all__ = [
     "FALLBACKS_BETA",
     "FALLBACKS_MODE",
     "JSON_MAX_TOKENS",
+    "STAGE_RECEIPT",
+    "STAGE_REPLY",
+    "STAGE_UNDERSTANDING",
     "TEXT_MAX_TOKENS",
     "AnthropicLLMClient",
     "LLMClient",
@@ -512,5 +521,6 @@ __all__ = [
     "LLMUnavailableError",
     "ToolExecutor",
     "get_llm_client",
+    "image_block",
     "is_llm_configured",
 ]

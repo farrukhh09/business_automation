@@ -18,6 +18,7 @@ from app.repositories.customers import customer_phone_condition, customer_search
 from app.services.constants import (
     ACTIVE_ORDER_STATUSES,
     DRAFT_ORDER_STATUSES,
+    PREPAYMENT_ORDER_STATUSES,
     VALID_ORDER_STATUSES,
     sorted_statuses,
 )
@@ -183,6 +184,22 @@ class OrderRepository(BaseRepository[Order]):
             select(Order)
             .where(Order.customer_id == customer_id, Order.status.in_(sorted_statuses(statuses)))
             .options(selectinload(Order.items), selectinload(Order.delivery))
+            .order_by(Order.id.desc())
+            .limit(1)
+        )
+        return self.db.scalars(stmt).first()
+
+    def latest_awaiting_payment_for_customer(self, customer_id: int) -> Order | None:
+        """Newest placed order of the customer that is not paid in full (a receipt may belong to it, 03 §3)."""
+        stmt = (
+            select(Order)
+            .where(
+                Order.customer_id == customer_id,
+                Order.status.in_(sorted_statuses(PREPAYMENT_ORDER_STATUSES)),
+                Order.payment_status.in_(sorted([PaymentStatus.UNPAID, PaymentStatus.PARTIALLY_PAID])),
+                Order.total_amount > 0,
+            )
+            .options(selectinload(Order.items), selectinload(Order.payments))
             .order_by(Order.id.desc())
             .limit(1)
         )
