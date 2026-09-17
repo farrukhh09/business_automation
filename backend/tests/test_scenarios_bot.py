@@ -8,13 +8,14 @@ Deterministic: ``ScriptedLLM`` and ``FakeGeocoder`` only.
 # ruff: noqa: F811 — pytest fixtures imported from test_dialog_service are reused as parameter names
 
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.ai.responder import ReplyKind
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
+from app.core import time as app_time
 from app.integrations.maps.address import candidate_matches, geocode_queries, parse_address
 from app.integrations.maps.types import GeoCandidate, GeocodeResult, failed_result, rank_candidates
 from app.models.conversation import Conversation
@@ -233,6 +234,10 @@ def test_greeting_detector(text: str | None, expected: Greeting | None) -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
+        ("это всё", SmallTalk.DONE),
+        ("Спасибо, это всё", SmallTalk.DONE),  # while ordering, "это всё" is what matters
+        ("хорошо, больше ничего", SmallTalk.DONE),
+        ("все", SmallTalk.NONE),  # after "какие именно?" a bare "все" may mean "all of them"
         ("Добрый день", SmallTalk.GREETING),
         ("Здравствуйте всем!", SmallTalk.GREETING),
         ("Рӯз ба хайр", SmallTalk.GREETING),
@@ -255,6 +260,169 @@ def test_greeting_detector(text: str | None, expected: Greeting | None) -> None:
 )
 def test_small_talk_detector(text: str, expected: SmallTalk) -> None:
     assert detect_small_talk(text) is expected
+
+
+# --------------------------------------------------------------------------- quantities, repeated questions (17.09)
+
+
+@pytest.fixture
+def boxes(make_product: Callable[..., Product]) -> dict[str, Product]:
+    return {
+        "classic": make_product("Классические синнамоны", "100", unit="кор.", aliases=["классика"]),
+        "berry": make_product("Ягодные синнамоны", "100", unit="кор.", aliases=["ягодные", "ягодных"]),
+        "pistachio": make_product("Фисташковые синнамоны", "100", unit="кор.", aliases=["фисташковые", "фисташковых"]),
+    }
+
+
+def _items_of(bot: Bot) -> list[tuple[str, int]]:
+    return sorted((line.product_name, line.quantity) for line in bot.draft().items)
+
+
+def test_a_total_with_its_breakdown_is_not_an_extra_item(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """The live dialog: "5 синамонов, 3 ягодных и 2 фисташковых" became five more rolls to pick."""
+    text = "Хочу заказать 5 синамонов, 3 ягодных и 2 фисташковых"
+    entities = {
+        "items": [
+            item("синамонов", 5),
+            item("ягодных", 3, boxes["berry"].id),
+            item("фисташковых", 2, boxes["pistachio"].id),
+        ]
+    }
+    bot = Bot(db, make_conversation(), ScriptedLLM({text: understanding(intent="CREATE_ORDER", entities=entities)}))
+
+    outcome = bot.say(text)
+
+    assert bot.state.pending_items == []
+    assert _items_of(bot) == [("Фисташковые синнамоны", 2), ("Ягодные синнамоны", 3)]
+    assert reply_text(outcome) == "Уточните, пожалуйста:\n1. На какую дату нужен заказ?\n2. К какому времени?"
+
+
+def test_a_partial_breakdown_asks_only_for_the_rest(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    text = "5 синнамонов, 3 ягодных"
+    llm = ScriptedLLM(
+        {
+            text: understanding(
+                intent="CREATE_ORDER",
+                entities={"items": [item("синнамонов", 5), item("ягодных", 3, boxes["berry"].id)]},
+            ),
+            "классику": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("классику", None, boxes["classic"].id)]}
+            ),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    outcome = bot.say(text)
+
+    [pending] = bot.state.pending_items
+    assert (pending["kind"], pending["quantity"]) == ("generic", 2)
+    # the question is a template: what is written down, and how many more — no invented numbers
+    assert reply_text(outcome) == (
+        "Записали: Ягодные синнамоны — 3 кор.\n"
+        "Подскажите, пожалуйста, какие ещё 2 выбрать? "
+        "Сейчас есть: Классические синнамоны, Фисташковые синнамоны, Ягодные синнамоны."
+    )
+    assert outcome.reply.source.value == "template"
+
+    bot.say("классику")
+    assert _items_of(bot) == [("Классические синнамоны", 2), ("Ягодные синнамоны", 3)]
+    assert bot.state.pending_items == []
+
+
+def test_kinds_named_without_numbers_after_a_total_are_asked_how_many(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    text = "4 синнамона: ягодные и фисташковые"
+    entities = {
+        "items": [
+            item("синнамона", 4),
+            item("ягодные", None, boxes["berry"].id),
+            item("фисташковые", None, boxes["pistachio"].id),
+        ]
+    }
+    bot = Bot(db, make_conversation(), ScriptedLLM({text: understanding(intent="CREATE_ORDER", entities=entities)}))
+
+    outcome = bot.say(text)
+
+    assert [entry["kind"] for entry in bot.state.pending_items] == ["quantity", "quantity"]
+    assert reply_text(outcome) == "Сколько штук нужно: Ягодные синнамоны, Фисташковые синнамоны?"
+
+
+def test_a_count_after_the_kinds_is_more_to_choose_and_eto_vsyo_ends_it(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    text = "2 ягодных и ещё 3 синнамона"
+    entities = {"items": [item("ягодных", 2, boxes["berry"].id), item("синнамона", 3)]}
+    llm = ScriptedLLM({text: understanding(intent="CREATE_ORDER", entities=entities)})
+    bot = Bot(db, make_conversation(), llm)
+    bot.say(text)
+    [pending] = bot.state.pending_items
+    assert (pending["kind"], pending["quantity"]) == ("generic", 3)
+    calls = len(llm.json_calls)
+
+    outcome = bot.say("Это всё")
+
+    # the open "какие ещё?" is dropped instead of being asked again and again
+    assert bot.state.pending_items == []
+    assert _items_of(bot) == [("Ягодные синнамоны", 2)]
+    assert reply_text(outcome) == "Уточните, пожалуйста:\n1. На какую дату нужен заказ?\n2. К какому времени?"
+    assert len(llm.json_calls) == calls
+
+
+def test_a_repeated_list_is_not_written_as_the_order_comment(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    repeated = "Так я же сказал всего 5 синамонов, 3 ягодных и 2 фисташковых"
+    llm = ScriptedLLM(
+        {
+            "Хочу 3 ягодных": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("ягодных", 3, boxes["berry"].id)]}
+            ),
+            repeated: understanding(
+                intent="CHANGE_ORDER", entities={"comment": "Я же сказал всего 5 синамонов, 3 ягодных и 2 фисташковых"}
+            ),
+            "Положите открытку": understanding(intent="CHANGE_ORDER", entities={"comment": "Положите открытку"}),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    bot.say("Хочу 3 ягодных")
+
+    bot.say(repeated)
+    assert bot.draft().comment is None
+
+    bot.say("Положите открытку")  # a real wish is kept
+    assert bot.draft().comment == "Положите открытку"
+
+
+def test_a_too_early_hour_keeps_the_day_and_asks_only_for_the_time(
+    db: Session,
+    catalog: dict[str, Product],
+    make_conversation: Callable[..., Conversation],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    moment = datetime(2026, 9, 17, 11, 12, tzinfo=UTC)  # 16:12 in Khujand, the lead time is 24 h
+    monkeypatch.setattr(app_time, "now_utc", lambda: moment)
+    monkeypatch.setattr("app.services.order_validator.now_utc", lambda: moment)
+    text = "Медовик на 18 сентября к 16:00"
+    entities = {
+        "items": [item("медовик", 1, catalog["honey"].id)],
+        "delivery_date": "2026-09-18",
+        "delivery_time": "16:00",
+    }
+    bot = Bot(db, make_conversation(), ScriptedLLM({text: understanding(intent="CREATE_ORDER", entities=entities)}))
+
+    outcome = bot.say(text)
+
+    order = bot.draft()
+    assert (order.delivery_date, order.delivery_time) == (date(2026, 9, 18), None)
+    assert reply_text(outcome) == (
+        "На завтра можем не раньше 17:00.\n"
+        "Уточните, пожалуйста:\n1. К какому времени?\n2. Это будет доставка или самовывоз?"
+    )
 
 
 # --------------------------------------------------------------------------- dates and phones
@@ -340,14 +508,15 @@ def test_not_found_address_then_dalshe_reaches_the_summary(
 
     assert clarify.reply.kind == ReplyKind.ADDRESS_CLARIFY
     text = reply_text(clarify)
-    assert text.startswith("Не нашли этот адрес на карте 🙁")
+    # the address is kept — only the map did not know it (never "no such address")
+    assert text.startswith("Адрес записали, но на карте он не нашёлся 🙁 Отметьте, пожалуйста, точку на карте: http")
     assert "напишите «дальше»" in text
     assert "location" not in bot.state.missing_fields
     order = bot.draft()
     assert order.delivery.geocode_status == GeocodeStatus.NOT_FOUND
     # the customer's text was parsed for the courier
     assert (order.delivery.microdistrict, order.delivery.house, order.delivery.apartment) == ("18", "7", "6")
-    assert geocoder.queries == ["Худжанд, 18-й микрорайон, 7", "Худжанд, 18-й микрорайон"]
+    assert geocoder.queries == ["Худжанд, 18 мкр, 7", "Худжанд, 18 микрорайон", "Худжанд, 18 мкр"]
 
     summary = bot.say("дальше")
 
@@ -443,12 +612,16 @@ def test_a_second_address_is_geocoded_and_accepted(
     bot.say("18 мкр дом 7")
 
     geocoder.result = single_house("10, проспект Рудаки, Шохмансур, Душанбе")
+    geocoder.queries.clear()
     summary = bot.say("проспект Рудаки 10")
 
     assert summary.reply.kind == ReplyKind.ORDER_SUMMARY
     delivery = bot.draft().delivery
     assert delivery.geocode_status == GeocodeStatus.OK and delivery.has_coordinates
     assert delivery.address_raw == "проспект Рудаки 10"
+    # the parts of the first address (18 мкр, дом 7) are not geocoded instead of the new text
+    assert geocoder.queries == ["Худжанд, проспект Рудаки, 10"]
+    assert (delivery.microdistrict, delivery.street, delivery.house) == (None, "проспект Рудаки", "10")
 
 
 # --------------------------------------------------------------------------- geocoding ladder (service level)
@@ -502,11 +675,11 @@ def test_ladder_falls_back_to_the_microdistrict_and_rejects_other_numbers(db: Se
         ],
         provider="fake",
     )
-    geocoder = _RecordingGeocoder({"Худжанд, 18-й микрорайон": fuzzy}, default=empty)
+    geocoder = _RecordingGeocoder({"Худжанд, 18 микрорайон": fuzzy}, default=empty)
 
     GeocodingService(db, geocoder=geocoder).geocode_delivery(order.delivery)
 
-    assert geocoder.calls == ["Худжанд, 18-й микрорайон, 7", "Худжанд, 18-й микрорайон"]
+    assert geocoder.calls == ["Худжанд, 18 мкр, 7", "Худжанд, 18 микрорайон"]
     assert order.delivery.geocode_status == GeocodeStatus.AMBIGUOUS
     assert [c["formatted"] for c in order.delivery.geocode_candidates] == ["18-й микрорайон, Себзор, Худжанд"]
     assert order.delivery.latitude is None
@@ -564,9 +737,11 @@ def test_parse_address(raw: str, expected: dict[str, str]) -> None:
 
 
 def test_geocode_queries_ladder() -> None:
+    # Khujand's OpenStreetMap names: houses on "18 мкр", places "18 микрорайон" (never "18-й микрорайон")
     assert [(q.level, q.text) for q in geocode_queries(parse_address("18 мкр дом 7 кв 6"), "Худжанд")] == [
-        ("house", "Худжанд, 18-й микрорайон, 7"),
-        ("microdistrict", "Худжанд, 18-й микрорайон"),
+        ("house", "Худжанд, 18 мкр, 7"),
+        ("microdistrict", "Худжанд, 18 микрорайон"),
+        ("microdistrict", "Худжанд, 18 мкр"),
     ]
     assert [(q.level, q.text) for q in geocode_queries(parse_address("ул. Айни 12"), "Худжанд")] == [
         ("house", "Худжанд, улица Айни, 12"),
@@ -583,10 +758,15 @@ def test_geocode_queries_ladder() -> None:
 
 
 def test_candidate_matches_rejects_only_contradictions() -> None:
-    [house_query, microdistrict_query] = geocode_queries(parse_address("18 мкр дом 7"), "Худжанд")
+    [house_query, microdistrict_query, _] = geocode_queries(parse_address("18 мкр дом 7"), "Худжанд")
     assert not candidate_matches(microdistrict_query, "91-й микрорайон, Себзор, Худжанд")
     assert candidate_matches(microdistrict_query, "18-й микрорайон, Себзор, Худжанд")
     assert candidate_matches(house_query, "Худжанд, Таджикистан")  # coarse, graded by precision later
+    # live Nominatim answers for "28 мкр": house 28 of another microdistrict is out, the "28мкр" street in
+    # the 27th microdistrict's area stays
+    [house_28, *_] = geocode_queries(parse_address("28 микрорайон дом 76"), "Худжанд")
+    assert not candidate_matches(house_28, "28, 31 мкр, 31 микрорайон, Шейх Бурхан, г.Худжанд")
+    assert candidate_matches(house_28, "28мкр, 27 микрорайон, г.Худжанд, Согдийская область")
     [street_query] = geocode_queries(parse_address("улица Айни"), "Худжанд")
     assert not candidate_matches(street_query, "улица Бухоро, Пахтакор, Худжанд")
     assert candidate_matches(street_query, "Пахтакор, Худжанд")

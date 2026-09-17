@@ -261,10 +261,6 @@ def parse_address(raw: str | None) -> ParsedAddress:
     )
 
 
-def _microdistrict_label(number: str) -> str:
-    return f"{number}-й микрорайон"
-
-
 def geocode_queries(parsed: ParsedAddress, city: str) -> list[AddressQuery]:
     """The query ladder for one address, most precise first (at most :data:`MAX_QUERIES` entries)."""
     city_part = _clean(city)
@@ -280,10 +276,14 @@ def geocode_queries(parsed: ParsedAddress, city: str) -> list[AddressQuery]:
             add(f"{prefix}{parsed.street}, {parsed.house}", LEVEL_HOUSE, street=parsed.street, house=parsed.house)
         add(f"{prefix}{parsed.street}", LEVEL_STREET, street=parsed.street)
     if parsed.microdistrict:
-        label = _microdistrict_label(parsed.microdistrict)
+        # Khujand in OpenStreetMap (checked 17.09.2026): buildings carry addr:street "31 мкр" / "34 МКР",
+        # the places are "28 микрорайон" / "29-й мкр". "28-й микрорайон" finds other microdistricts only,
+        # and "31 микрорайон, 28" finds the microdistrict but not its house 28 — hence "мкр" with a house.
+        number = parsed.microdistrict
         if parsed.house and not parsed.street:
-            add(f"{prefix}{label}, {parsed.house}", LEVEL_HOUSE, microdistrict=parsed.microdistrict, house=parsed.house)
-        add(f"{prefix}{label}", LEVEL_MICRODISTRICT, microdistrict=parsed.microdistrict)
+            add(f"{prefix}{number} мкр, {parsed.house}", LEVEL_HOUSE, microdistrict=number, house=parsed.house)
+        add(f"{prefix}{number} микрорайон", LEVEL_MICRODISTRICT, microdistrict=number)
+        add(f"{prefix}{number} мкр", LEVEL_MICRODISTRICT, microdistrict=number)
     if not parsed.street and not parsed.microdistrict and parsed.rest:
         # "Испечак, дом 3", "Зарафшон 12": a locality or a street written without its type word.
         if parsed.house:

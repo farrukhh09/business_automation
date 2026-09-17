@@ -5,6 +5,7 @@ fields); this module only decides *how* it is worded:
 
 - kinds in ``TEMPLATE_KINDS`` (greeting, summary, confirmation, cancellation, handoff, map link…) are
   always rendered by ``app.ai.templates`` — their numbers and their meaning must never depend on a model;
+  so is an ``ASK_MISSING`` that carries item choices or a refusal (``uses_template``);
 - every other kind is worded by the LLM (``complete_text``) under the reply system prompt, then
   checked by ``ResponseGuard`` (money only from FACTS, no confirmation claims, no invented stock or
   discounts, no catalog product outside FACTS) and by a language check. Any LLM error, an empty
@@ -29,6 +30,7 @@ from app.core.logging import get_logger, log_event
 logger = get_logger(__name__)
 
 __all__ = [
+    "EXACT_ASK_FACTS",
     "TEMPLATE_KINDS",
     "Reply",
     "ReplyKind",
@@ -36,6 +38,7 @@ __all__ = [
     "ReplySource",
     "Responder",
     "fact_amounts",
+    "uses_template",
 ]
 
 
@@ -81,6 +84,13 @@ TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
 )
 
 
+#: ``ASK_MISSING`` facts the customer must read exactly — the item choices ("какие именно?"), unknown
+#: products, a refused date/time, an invalid phone. Worded by the model in live dialogs they turned
+#: into invented counts ("какие ещё три?"), a "всё верно" instead of the question, and a repeated
+#: refusal of a date that had already been accepted (17.09.2026).
+EXACT_ASK_FACTS: tuple[str, ...] = ("pending_items", "unknown_products", "timing_problem", "phone_invalid")
+
+
 class ReplySource(StrEnum):
     TEMPLATE = "template"  # the kind is template-only, or no LLM is configured
     LLM = "llm"  # worded by the model and accepted by the guard
@@ -108,6 +118,17 @@ class Reply:
     language: str
     source: ReplySource
     violations: tuple[str, ...] = ()
+
+
+def uses_template(plan: ReplyPlan) -> bool:
+    """Template kinds, questions whose facts must be read exactly (``EXACT_ASK_FACTS``), and "ок" /
+    "дальше" / "это всё": a bare "go on" has nothing to word — at an order summary the model answered
+    it with "Всё верно, заказ уже ждёт подтверждения" instead of the plain reminder."""
+    if plan.kind in TEMPLATE_KINDS:
+        return True
+    if plan.kind == ReplyKind.SMALL_TALK:
+        return plan.facts.get("small_talk") in ("ack", "done")
+    return plan.kind == ReplyKind.ASK_MISSING and any(plan.facts.get(key) for key in EXACT_ASK_FACTS)
 
 
 # --------------------------------------------------------------------------- facts → guard inputs
@@ -180,7 +201,7 @@ class Responder:
 
     def generate_reply(self, plan: ReplyPlan) -> Reply:
         template_text = templates.render(plan.kind, plan.language, plan.facts, plan.missing_fields)
-        if plan.kind in TEMPLATE_KINDS or self._llm is None:
+        if uses_template(plan) or self._llm is None:
             return Reply(template_text, plan.kind, plan.language, ReplySource.TEMPLATE)
 
         try:

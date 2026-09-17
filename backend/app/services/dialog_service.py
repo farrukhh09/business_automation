@@ -49,7 +49,7 @@ from app.ai.handoff import detect_operator_request
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
 from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention
-from app.ai.responder import TEMPLATE_KINDS, Reply, ReplyKind, ReplyPlan, Responder
+from app.ai.responder import Reply, ReplyKind, ReplyPlan, Responder, uses_template
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.ai.templates import MAX_QUESTIONS, render
 from app.ai.text_normalize import normalize_fold
@@ -143,6 +143,9 @@ REASON_ORDER_LOCKED = "Клиент просит изменить заказ №
 REASON_CANCEL_LOCKED = "Клиент просит отменить заказ №{order_id}, который уже в работе"
 CANCEL_REASON = "Отменён клиентом в Instagram"
 CANCEL_REQUEST_TEXT = "отменить заказ. Сообщение клиента: {text}"
+
+#: Structured parts of a delivery address, parsed from the customer's text (06 §2).
+ADDRESS_PART_FIELDS = ("district", "microdistrict", "street", "house", "apartment", "entrance", "floor", "landmark")
 
 _BARE_NUMBER_RE = re.compile(r"^\s*(\d{1,3})\s*(?:шт\.?|штук[аи]?|дона|pcs)?\s*[.!]?\s*$", re.IGNORECASE)
 
@@ -527,10 +530,16 @@ class DialogService:
         order = self._draft(turn)
         state = turn.state
         if (
-            kind == SmallTalk.ACK.value
+            kind in (SmallTalk.ACK.value, SmallTalk.DONE.value)
             and order is not None
             and state.awaiting in (AWAITING_MISSING_FIELDS, AWAITING_ADDRESS_CHOICE, None)
         ):
+            if kind == SmallTalk.DONE.value and order.items:
+                # "Это всё": nothing more to pick — the open "какие именно?" is not asked again.
+                choices = [entry for entry in state.pending_items if entry["kind"] != PENDING_QUANTITY]
+                if choices:
+                    state.pending_items = [entry for entry in state.pending_items if entry not in choices]
+                    turn.actions.append("item_choices_dropped")
             state.address_candidates = []
             if state.awaiting == AWAITING_ADDRESS_CHOICE:
                 state.awaiting = None
@@ -743,7 +752,7 @@ class DialogService:
         resolved: list[dict[str, Any]] = []
         new_pending: list[dict[str, Any]] = []
         unknown: list[str] = []
-        for mention in mentions:
+        for position, mention in enumerate(mentions):
             product = by_id.get(mention.product_id) if mention.product_id is not None else None
             text = mention.product_text or (product.name if product is not None else "")
             if product is None:
@@ -760,6 +769,7 @@ class DialogService:
                             "name": None,
                             "options": [candidate for candidate in match.candidates if candidate in by_id],
                             "comment": mention.comment,
+                            "position": position,
                         }
                     )
                     continue
@@ -773,8 +783,12 @@ class DialogService:
                     "name": product.name,
                     "quantity": mention.quantity,
                     "comment": mention.comment,
+                    "position": position,
                 }
             )
+        new_pending = _split_totals(new_pending, resolved)
+        for entry in new_pending:
+            del entry["position"]
 
         if unknown:
             turn.notes["unknown_products"] = unknown
@@ -868,7 +882,7 @@ class DialogService:
             target_type = DeliveryType.DELIVERY
         if entities.payment_method is not None:
             changes["payment_method"] = entities.payment_method
-        if entities.comment:
+        if entities.comment and not self._restates_items(turn, entities.comment):
             existing = (order.comment or "").strip()
             if entities.comment not in existing:
                 changes["comment"] = f"{existing}; {entities.comment}" if existing else entities.comment
@@ -884,6 +898,11 @@ class DialogService:
         if target_type == DeliveryType.DELIVERY:
             if entities.address:
                 delivery["address_raw"] = entities.address
+                current = order.delivery
+                if current is not None and normalize_fold(current.address_raw) != normalize_fold(entities.address):
+                    # The parts of the previous address (microdistrict, house…) describe the previous place:
+                    # left in place they would be geocoded instead of the new text.
+                    delivery.update(dict.fromkeys(ADDRESS_PART_FIELDS))
             if entities.recipient_name:
                 delivery["recipient_name"] = entities.recipient_name
             recipient_phone = self._phone(turn, entities.recipient_phone)
@@ -912,11 +931,29 @@ class DialogService:
         problems = OrderValidator.slot_problems(candidate_date, candidate_time, turn.business)
         if problems:
             self._note_timing(turn, problems[0], candidate_date)
+            day_is_possible = not OrderValidator.slot_problems(candidate_date, None, turn.business)
+            if problems == [TOO_SOON] and new_time is not None and day_is_possible:
+                # "18 сентября к 16:00" when 17:00 is the earliest: the day stays, only the hour is asked again.
+                turn.notes["timing_keeps_date"] = True
+                if new_date is not None:
+                    changes["delivery_date"] = new_date
             return
         if new_date is not None:
             changes["delivery_date"] = new_date
         if new_time is not None:
             changes["delivery_time"] = new_time
+
+    def _restates_items(self, turn: _Turn, text: str) -> bool:
+        """ "Я же сказал всего 5 синамонов, 3 ягодных и 2 фисташковых" is the item list again, not a wish
+        for the order: a "comment" naming two or more counted products is not written to the order."""
+        tokens = normalize_fold(text).split()
+        matcher = ProductMatcher(self._catalog(turn))
+        counted = sum(
+            1
+            for number, word in zip(tokens, tokens[1:], strict=False)
+            if number.isdigit() and (is_generic_mention(word) or matcher.match(word))
+        )
+        return counted >= 2
 
     def _phone(self, turn: _Turn, raw: str | None) -> str | None:
         if not raw:
@@ -1162,7 +1199,14 @@ class DialogService:
                 for entry in turn.state.pending_items
             ]
         facts["order_so_far"] = {
-            "items": [{"name": item.product_name, "quantity": item.quantity} for item in order.items],
+            "items": [
+                {
+                    "name": item.product_name,
+                    "quantity": item.quantity,
+                    "unit": item.product.unit if item.product is not None else None,
+                }
+                for item in order.items
+            ],
             "delivery_date": order.delivery_date.isoformat() if order.delivery_date else None,
             "delivery_time": order.delivery_time.strftime("%H:%M") if order.delivery_time else None,
             "delivery_type": order.delivery_type.value if order.delivery_type else None,
@@ -1284,7 +1328,8 @@ class DialogService:
         conversation = turn.conversation
         if reset_attempts:
             conversation.failed_ai_attempts = 0
-        if plan.kind not in TEMPLATE_KINDS and not plan.context:
+        template_only = uses_template(plan)
+        if not template_only and not plan.context:
             plan = replace(plan, context=self._reply_context(turn))
         turn.state.language = plan.language
         if turn.customer.language != Language(plan.language):
@@ -1294,7 +1339,7 @@ class DialogService:
             turn.message.ai_processed = True
         self.db.commit()
 
-        wording = plan.kind not in TEMPLATE_KINDS and self.settings.LLM_REPLY_WORDING_ENABLED
+        wording = not template_only and self.settings.LLM_REPLY_WORDING_ENABLED
         llm = self.llm if wording else None
         reply = Responder(llm, catalog_names=[product.name for product in self._catalog(turn)]).generate_reply(plan)
         log_event(
@@ -1330,6 +1375,34 @@ def _has_order_fields(entities: Entities) -> bool:
         entities.payment_method,
     )
     return any(value is not None for value in values)
+
+
+def _split_totals(pending: list[dict[str, Any]], resolved: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """ "5 синнамонов: 3 ягодных и 2 фисташковых" — a counted category word followed, in the same message,
+    by products of that category is their total, not five more rolls to choose.
+
+    The kinds named after it take the count: kinds without a number share it like an answer to
+    "какие именно?" (``_distribute_quantities``), and when every kind has its own number, only the rest
+    is still asked about ("5 синнамонов, 3 ягодных" → which 2 more). Returns the pending entries left.
+    """
+    kept: list[dict[str, Any]] = []
+    for entry in pending:
+        total = entry.get("quantity")
+        parts = [
+            item
+            for item in resolved
+            if item["position"] > entry["position"] and item["product_id"] in (entry.get("options") or [])
+        ]
+        if entry["kind"] != PENDING_GENERIC or total is None or not parts:
+            kept.append(entry)
+            continue
+        unspecified = [item for item in parts if item["quantity"] is None]
+        remaining = total - sum(item["quantity"] for item in parts if item["quantity"] is not None)
+        if unspecified:
+            _distribute_quantities([{**entry, "quantity": total}], parts)
+        elif remaining >= 1:
+            kept.append({**entry, "quantity": remaining})
+    return kept
 
 
 def _distribute_quantities(choice_pending: list[dict[str, Any]], resolved: list[dict[str, Any]]) -> None:

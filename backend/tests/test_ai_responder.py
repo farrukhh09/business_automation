@@ -73,7 +73,8 @@ def test_money_keeps_kopecks_only_when_present() -> None:
 def test_address_clarify_without_candidates_and_link() -> None:
     text = templates.render("ADDRESS_CLARIFY", "ru", {"candidates": [], "link": None})
     assert text == (
-        "Не нашли этот адрес на карте 🙁 Напишите, пожалуйста, точнее: район или микрорайон, улицу, дом и ориентир."
+        "Адрес записали, но на карте он не нашёлся 🙁 Напишите, пожалуйста, подробнее: микрорайон или улица, дом, "
+        "ориентир."
     )
 
 
@@ -232,6 +233,34 @@ def test_guard_violation_falls_back_to_the_template(llm_text: str, violation: st
     assert reply.source == ReplySource.FALLBACK
     assert reply.text == "Вот что у нас есть:\nМедовик — 750 сомони / шт."
     assert any(item.startswith(violation) for item in reply.violations), reply.violations
+
+
+def test_item_choices_and_refusals_are_never_worded_by_the_model() -> None:
+    # the model once turned "какие именно?" into "какие ещё три синнамона?" and "всё верно"
+    llm = ScriptedLLM(reply="Отлично, всё верно! А какие ещё три синнамона?")
+    facts = {
+        "pending_items": [{"kind": "generic", "quantity": 2, "options": ["Классические синнамоны"]}],
+        "order_so_far": {"items": [{"name": "Ягодные синнамоны", "quantity": 3, "unit": "кор."}]},
+    }
+    reply = Responder(llm).generate_reply(ReplyPlan(ReplyKind.ASK_MISSING, "ru", facts, ["items"]))
+    assert reply.source == ReplySource.TEMPLATE and llm.text_calls == []
+    assert reply.text == (
+        "Записали: Ягодные синнамоны — 3 кор.\n"
+        "Подскажите, пожалуйста, какие ещё 2 выбрать? Сейчас есть: Классические синнамоны."
+    )
+    timing = ReplyPlan(ReplyKind.ASK_MISSING, "ru", {"timing_problem": "delivery_too_soon"}, ["delivery_time"])
+    assert Responder(ScriptedLLM(reply="Выберите другое время")).generate_reply(timing).source == ReplySource.TEMPLATE
+
+    # a plain question about a missing field is still worded by the model
+    plain = ReplyPlan(ReplyKind.ASK_MISSING, "ru", {}, ["delivery_date"])
+    assert Responder(ScriptedLLM(reply="На какой день вам удобно?")).generate_reply(plain).source == ReplySource.LLM
+
+    # "дальше" at the summary: the plain reminder, not the model's "Всё верно, заказ уже ждёт…"
+    go_on = ReplyPlan(ReplyKind.SMALL_TALK, "ru", {"small_talk": "ack", "confirmation_pending_order_id": 7})
+    reply = Responder(ScriptedLLM(reply="Всё верно, заказ уже ждёт подтверждения")).generate_reply(go_on)
+    assert (reply.source, reply.text) == (ReplySource.TEMPLATE, "Чтобы подтвердить заказ №7, напишите «Да».")
+    thanks = ReplyPlan(ReplyKind.SMALL_TALK, "ru", {"small_talk": "thanks"})
+    assert Responder(ScriptedLLM(reply="Рады помочь!")).generate_reply(thanks).source == ReplySource.LLM
 
 
 def test_llm_error_falls_back_to_the_template() -> None:

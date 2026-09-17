@@ -143,10 +143,12 @@ _TEXTS: dict[str, dict[str, str]] = {
         "address_candidates": "Уточните, пожалуйста, адрес. Возможно, это один из вариантов:",
         "address_choose": "Напишите номер варианта или отметьте точку на карте: {link}",
         "address_choose_no_link": "Напишите номер подходящего варианта или уточните адрес.",
-        "address_not_found": (
-            "Не нашли этот адрес на карте 🙁 Напишите, пожалуйста, точнее: район или микрорайон, улицу, дом и ориентир"
+        "address_not_found": "Адрес записали, но на карте он не нашёлся 🙁",
+        "address_not_found_link": (
+            "Отметьте, пожалуйста, точку на карте: {link} — так курьер точно вас найдёт. "
+            "Или напишите адрес подробнее: микрорайон или улица, дом, ориентир."
         ),
-        "address_link": " — или отметьте точку на карте: {link}",
+        "address_not_found_no_link": "Напишите, пожалуйста, подробнее: микрорайон или улица, дом, ориентир.",
         "address_approximate": (
             "Нашли на карте «{place}», но не сам дом. Отметьте, пожалуйста, точку на карте: {link} — "
             "так курьер точно вас найдёт."
@@ -161,7 +163,9 @@ _TEXTS: dict[str, dict[str, str]] = {
             "а курьер уточнит по телефону."
         ),
         "clarify_intro": "Уточните, пожалуйста:",
+        "recorded": "Записали: {items}.",
         "pending_generic": "Подскажите, пожалуйста, какие именно? Сейчас есть: {options}.",
+        "pending_generic_more": "Подскажите, пожалуйста, какие ещё {quantity} выбрать? Сейчас есть: {options}.",
         "pending_ambiguous": "Уточните, пожалуйста, какой именно товар вы имели в виду: {options}?",
         "pending_quantity": "Сколько штук нужно: {names}?",
         "unknown_products": "К сожалению, {names} нет в нашем каталоге.",
@@ -169,10 +173,13 @@ _TEXTS: dict[str, dict[str, str]] = {
         "too_soon": (
             "Заказы принимаем не позднее чем за {hours} ч.{earliest} Выберите, пожалуйста, другую дату или время."
         ),
+        "too_soon_same_day": "На {day} можем не раньше {time}.",
         "earliest": " Самое раннее — {when}.",
         "earliest_today": "сегодня после {time}",
         "earliest_tomorrow": "завтра после {time}",
         "earliest_date": "{date} после {time}",
+        "day_today": "сегодня",
+        "day_tomorrow": "завтра",
         "date_past": "{date} уже прошло 🙂",
         "too_far": "Заказы принимаем не больше чем на {days} дн. вперёд. Выберите, пожалуйста, другую дату.",
         "phone_invalid": (
@@ -232,10 +239,12 @@ _TEXTS: dict[str, dict[str, str]] = {
         "address_candidates": "Лутфан, суроғаро аниқ кунед. Шояд яке аз инҳо бошад:",
         "address_choose": "Рақами вариантро нависед ё нуқтаро дар харита қайд кунед: {link}",
         "address_choose_no_link": "Рақами варианти мувофиқро нависед ё суроғаро аниқ кунед.",
-        "address_not_found": (
-            "Ин суроғаро дар харита наёфтем 🙁 Лутфан, аниқтар нависед: ноҳия ё микрорайон, кӯча, хона ва нишона"
+        "address_not_found": "Суроғаро навиштем, аммо онро дар харита наёфтем 🙁",
+        "address_not_found_link": (
+            "Лутфан, нуқтаро дар харита қайд кунед: {link} — то хаткашон шуморо дақиқ ёбад. "
+            "Ё суроғаро муфассалтар нависед: микрорайон ё кӯча, хона, нишона."
         ),
-        "address_link": " — ё нуқтаро дар харита қайд кунед: {link}",
+        "address_not_found_no_link": "Лутфан, муфассалтар нависед: микрорайон ё кӯча, хона, нишона.",
         "address_approximate": (
             "Дар харита «{place}»-ро ёфтем, аммо худи хонаро не. Лутфан, нуқтаро дар харита қайд кунед: {link} — "
             "то хаткашон шуморо дақиқ ёбад."
@@ -252,7 +261,9 @@ _TEXTS: dict[str, dict[str, str]] = {
             "хаткашон бо телефон аниқ мекунад."
         ),
         "clarify_intro": "Лутфан, аниқ кунед:",
+        "recorded": "Навиштем: {items}.",
         "pending_generic": "Лутфан, бигӯед, кадомашро мехоҳед? Ҳоло дорем: {options}.",
+        "pending_generic_more": "Лутфан, бигӯед, боз кадомҳоро мехоҳед ({quantity})? Ҳоло дорем: {options}.",
         "pending_ambiguous": "Лутфан, аниқ кунед, кадом маҳсулотро дар назар доред: {options}?",
         "pending_quantity": "Чанд дона лозим аст: {names}?",
         "unknown_products": "Мутаассифона, {names} дар каталоги мо нест.",
@@ -261,9 +272,12 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Фармоишҳоро на дертар аз {hours} соат пеш қабул мекунем.{earliest} "
             "Лутфан, сана ё вақти дигарро интихоб кунед."
         ),
+        "too_soon_same_day": "Барои {day} — на барвақттар аз соати {time}.",
         "earliest": " Барвақттарин — {when}.",
         "earliest_today": "имрӯз баъд аз соати {time}",
         "earliest_tomorrow": "пагоҳ баъд аз соати {time}",
+        "day_today": "имрӯз",
+        "day_tomorrow": "пагоҳ",
         "earliest_date": "{date} баъд аз соати {time}",
         "date_past": "{date} аллакай гузашт 🙂",
         "too_far": "Фармоишҳоро на бештар аз {days} рӯз пеш қабул мекунем. Лутфан, санаи дигарро интихоб кунед.",
@@ -395,10 +409,15 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
         available = facts.get("available_products") or []
         if available:
             notes.append(_t(language, "available_products", names=_names([_product_name(p) for p in available])))
+    recorded = _recorded_items(facts)
     for pending in facts.get("pending_items") or []:
         kind = pending.get("kind")
         options = _names(pending.get("options") or [])
-        if kind == "generic" and options:
+        quantity = _text(pending.get("quantity"))
+        if kind == "generic" and options and recorded and quantity:
+            # "5 синнамонов, 3 ягодных": the 3 are written down — the question is about the 2 more.
+            notes.append(_t(language, "pending_generic_more", quantity=quantity, options=options))
+        elif kind == "generic" and options:
             notes.append(_t(language, "pending_generic", options=options))
         elif kind == "ambiguous" and options:
             notes.append(_t(language, "pending_ambiguous", options=options))
@@ -410,6 +429,9 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
     timing = facts.get("timing_problem")
     if timing == "delivery_date_past":
         notes.append(_t(language, "date_past", date=_date(facts.get("problem_date")) or "…"))
+    elif timing == "delivery_too_soon" and facts.get("timing_keeps_date") and _text(facts.get("earliest_time")):
+        # The day was accepted, only the hour was too early: "На завтра можем не раньше 17:00."
+        notes.append(_t(language, "too_soon_same_day", day=_earliest_day(facts, language), time=facts["earliest_time"]))
     elif timing == "delivery_too_soon":
         earliest = _earliest(facts, language)
         notes.append(
@@ -439,6 +461,21 @@ def _earliest(facts: Mapping[str, Any], language: str) -> str:
         return _t(language, "earliest_tomorrow", time=time_text)
     date_text = _date(facts.get("earliest_date"))
     return _t(language, "earliest_date", date=date_text, time=time_text) if date_text else ""
+
+
+def _earliest_day(facts: Mapping[str, Any], language: str) -> str:
+    """ "сегодня" / "завтра" / "18.09.2026" — the day of the earliest slot."""
+    relative = _text(facts.get("earliest_relative"))
+    if relative in ("today", "tomorrow"):
+        return _t(language, f"day_{relative}")
+    return _date(facts.get("earliest_date")) or "…"
+
+
+def _recorded_items(facts: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Items already in the draft (``order_so_far``), for "Записали: …" next to an item question."""
+    order = facts.get("order_so_far")
+    items = order.get("items") if isinstance(order, Mapping) else None
+    return [item for item in items or [] if isinstance(item, Mapping) and _text(item.get("name"))]
 
 
 def _reminder(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -537,7 +574,16 @@ def _ask_missing(facts: Mapping[str, Any], missing_fields: Sequence[str], langua
     fields = [field for field in missing_fields if not (notes and field == "items")]
     questions = _join_questions(_questions(fields, language), language)
     prices = "\n".join(_price_lines(facts, language))
-    body = "\n".join(part for part in (*notes, questions) if part)
+    recorded = ""
+    if facts.get("pending_items") and _recorded_items(facts):
+        # While items are still being picked, the customer sees what is already written down.
+        lines = [
+            f"{_text(item.get('name'))} — {_text(item.get('quantity'))} {_unit(item.get('unit'), language)}"
+            for item in _recorded_items(facts)
+        ]
+        # "— 3 кор." already ends the sentence: "Записали: … — 3 кор.", not "кор.."
+        recorded = _t(language, "recorded", items=", ".join(lines).removesuffix("."))
+    body = "\n".join(part for part in (recorded, *notes, questions) if part)
     return _paragraphs(prices, body) or _t(language, "clarify")
 
 
@@ -559,21 +605,25 @@ def _address_clarify(facts: Mapping[str, Any], missing_fields: Sequence[str], la
         key = "address_approximate" if link else "address_approximate_no_link"
         body = _t(language, key, place=approximate, link=link)
     else:
-        text = _t(language, "address_not_found")
-        body = f"{text}{_t(language, 'address_link', link=link)}" if link else f"{text}."
+        # The address is kept as written (03 §1.3): only the map did not know it — never "no such address".
+        hint = _t(language, "address_not_found_link", link=link) if link else _t(language, "address_not_found_no_link")
+        body = f"{_t(language, 'address_not_found')} {hint}"
     if facts.get("then_summary"):
         body = _paragraphs(body, _t(language, "address_continue"))
     return _paragraphs(body, _join_questions(_questions(missing_fields, language), language))
 
 
 def _small_talk(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
-    """Thanks / goodbye / "ок" / chat — plus the reminder of an open order, when there is one."""
+    """Thanks / goodbye / "ок" / "это всё" / chat — plus the reminder of an open order, when there is one."""
     kind = _text(facts.get("small_talk")) or "chat"
-    key = {"thanks": "small_talk_thanks", "goodbye": "small_talk_goodbye", "ack": "small_talk_ack"}.get(
-        kind, "small_talk_chat"
-    )
+    key = {
+        "thanks": "small_talk_thanks",
+        "goodbye": "small_talk_goodbye",
+        "ack": "small_talk_ack",
+        "done": "small_talk_ack",
+    }.get(kind, "small_talk_chat")
     reminder = _reminder(facts, missing_fields, language)
-    if kind == "ack" and reminder:
+    if kind in ("ack", "done") and reminder:
         return reminder
     return _paragraphs(_t(language, key), reminder)
 

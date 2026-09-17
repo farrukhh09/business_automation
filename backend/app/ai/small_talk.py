@@ -21,6 +21,7 @@ class SmallTalk(StrEnum):
     THANKS = "thanks"
     GOODBYE = "goodbye"
     ACK = "ack"  # "ок", "хорошо", "дальше" — the customer agrees to continue
+    DONE = "done"  # "это всё", "больше ничего" — nothing more to add to the order; go on
     NONE = "none"
 
 
@@ -164,6 +165,27 @@ _ACK = (
     "ха хуб",
 )
 
+#: A bare "все"/"всё" is not here: after "какие именно?" it may mean "all of them".
+_DONE = (
+    "это все",
+    "все на этом",
+    "на этом все",
+    "вот и все",
+    "больше ничего",
+    "ничего больше",
+    "больше не надо",
+    "больше не нужно",
+    "больше ничего не надо",
+    "только это",
+    "хватит",
+    "достаточно",
+    "бас",
+    "хамин бас",
+    "дигар не",
+    "дигар лозим не",
+    "дигар лозим нест",
+)
+
 _GREETING_CATEGORY = "greeting:"
 
 _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
@@ -171,6 +193,7 @@ _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
         ("ack", _ACK),
         ("thanks", _THANKS),
         ("goodbye", _GOODBYE),
+        ("done", _DONE),
         *((f"{_GREETING_CATEGORY}{greeting.value}", phrases) for greeting, phrases in _GREETINGS.items()),
     ]
 )
@@ -187,7 +210,8 @@ def _scan(text: str | None) -> tuple[list[str], dict[str, list[str]]]:
 def detect_small_talk(text: str | None) -> SmallTalk:
     """Classify a message that consists only of small-talk phrases (plus fillers). Never raises.
 
-    A greeting with anything else in it counts as the other part: "Здравствуйте, спасибо" is thanks.
+    A greeting with anything else in it counts as the other part: "Здравствуйте, спасибо" is thanks;
+    "Спасибо, это всё" is done — while an order is being filled, the "это всё" is what matters.
     """
     tokens, found = _scan(text)
     if not found:
@@ -196,6 +220,8 @@ def detect_small_talk(text: str | None) -> SmallTalk:
     # Only the words outside the matched phrases may be fillers: "ба" inside "рӯз ба хайр" does not excuse "нарх".
     if any(token not in _FILLER for token in (Counter(tokens) - matched).elements()):
         return SmallTalk.NONE  # there is more in the message than small talk
+    if "done" in found:
+        return SmallTalk.DONE
     if "thanks" in found:
         return SmallTalk.THANKS
     if "goodbye" in found:
