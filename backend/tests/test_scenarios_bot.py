@@ -21,7 +21,7 @@ from app.ai.llm_client import LLMUnavailableError
 from app.ai.responder import ReplyKind
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.core import time as app_time
-from app.integrations.maps.address import candidate_matches, geocode_queries, parse_address
+from app.integrations.maps.address import candidate_matches, geocode_queries, landmark_variants, parse_address
 from app.integrations.maps.types import GeoCandidate, GeocodeResult, failed_result, rank_candidates
 from app.models.conversation import Conversation, Message
 from app.models.enums import (
@@ -730,6 +730,99 @@ def test_rank_candidates_folds_a_poi_into_the_plain_house() -> None:
     assert rank_candidates([street, poi]) == [poi, street]  # a POI alone still carries the house
 
 
+def test_the_same_address_twice_is_one_candidate() -> None:
+    """Live Nominatim (18.09.2026): "115, улица Гагарина" came back twice, 132 m apart (a building and a
+    separate address point), and the customer was asked to choose between two identical lines."""
+    first = GeoCandidate("115, улица Гагарина, Кӯйи Қозӣ, Шейх Бурхан, г.Худжанд", 40.2800643, 69.6408514, "house")
+    second = GeoCandidate("115, улица Гагарина, Шейх Бурхан, г.Худжанд", 40.279785, 69.6423698, "house")
+    assert rank_candidates([first, second]) == [first]
+    # entrances of one building ("1-2 подъезд, 29, …") are the building
+    entrances = [
+        GeoCandidate(f"{label} подъезд, 29, 12 микрорайон, Худжанд", 40.30 + index * 0.0003, 69.60, "house")
+        for index, label in enumerate(("1-2", "3-4", "5-6"))
+    ]
+    assert rank_candidates(entrances) == entrances[:1]
+    # another number, or the same number far away, is a real alternative
+    other = GeoCandidate("117, улица Гагарина, г.Худжанд", 40.2801, 69.6409, "house")
+    far = GeoCandidate("115, улица Гагарина, Кайраккум", 40.25, 69.80, "house")
+    assert rank_candidates([first, other, far]) == [first, other, far]
+
+
+def test_a_house_is_tried_by_its_main_number_and_a_landmark_beats_the_microdistrict(db: Session, make_order) -> None:
+    empty = GeocodeResult(status=GeocodeStatus.NOT_FOUND, candidates=[], provider="fake")
+    main_house = GeocodeResult(
+        status=GeocodeStatus.OK,
+        candidates=[GeoCandidate("10, 34 МКР, Рӯмон, г.Худжанд", CITY_LAT, CITY_LNG, "house")],
+        provider="fake",
+    )
+    order = _order_with_address(make_order, "34 мкр 10/2")
+    geocoder = _RecordingGeocoder({"Худжанд, 34 мкр, 10": main_house}, default=empty)
+
+    GeocodingService(db, geocoder=geocoder).geocode_delivery(order.delivery)
+
+    assert geocoder.calls == ["Худжанд, 34 мкр, 10/2", "Худжанд, 34 мкр, 10"]
+    assert order.delivery.geocode_status == GeocodeStatus.OK
+
+    # house not in OSM; the school the customer named is found — it beats the microdistrict centroid, but a
+    # landmark is where the customer is near: never auto-accepted, never offered as "the" house
+    school = GeoCandidate("Школа 26, ул М.Авлиёев, Рӯмон, Худжанд", CITY_LAT + 0.001, CITY_LNG, "house", True)
+    microdistrict = GeoCandidate("18 микрорайон, г.Худжанд", CITY_LAT + 0.01, CITY_LNG, "district")
+    geocoder = _RecordingGeocoder(
+        {
+            "Худжанд, школа 26": GeocodeResult(GeocodeStatus.AMBIGUOUS, [school], "fake"),
+            "Худжанд, 18 микрорайон": GeocodeResult(GeocodeStatus.AMBIGUOUS, [microdistrict], "fake"),
+        },
+        default=empty,
+    )
+    near_school = _order_with_address(make_order, "18 мкр дом 7 возле 26 школы")
+
+    GeocodingService(db, geocoder=geocoder).geocode_delivery(near_school.delivery)
+
+    assert geocoder.calls == ["Худжанд, 18 мкр, 7", "Худжанд, школа 26"]  # the centroid is not needed then
+    delivery = near_school.delivery
+    assert delivery.geocode_status == GeocodeStatus.AMBIGUOUS and delivery.latitude is None
+    assert [(c["formatted"], c["precision"]) for c in delivery.geocode_candidates] == [
+        ("Школа 26, ул М.Авлиёев, Рӯмон, Худжанд", "other")
+    ]
+
+
+def test_a_known_microdistrict_is_not_searched_again(db: Session, make_order) -> None:
+    """ "29 микрорайон дом 1": the house query already returns the "29 мкр" streets — the two microdistrict
+    queries would find the same area, so the address costs one geocoder call instead of three."""
+    streets = GeocodeResult(
+        status=GeocodeStatus.AMBIGUOUS,
+        candidates=[
+            GeoCandidate("29 мкр, 29-й мкр, г.Худжанд", CITY_LAT, CITY_LNG, "street"),
+            GeoCandidate("29-й мкр, г.Худжанд", CITY_LAT, CITY_LNG + 0.001, "district"),
+        ],
+        provider="fake",
+    )
+    order = _order_with_address(make_order, "29 микрорайон дом 1")
+    geocoder = _RecordingGeocoder({"Худжанд, 29 мкр, 1": streets}, default=streets)
+
+    GeocodingService(db, geocoder=geocoder).geocode_delivery(order.delivery)
+
+    assert geocoder.calls == ["Худжанд, 29 мкр, 1"]
+    assert order.delivery.geocode_status == GeocodeStatus.AMBIGUOUS
+    assert order.delivery.geocode_candidates[0]["formatted"] == "29 мкр, 29-й мкр, г.Худжанд"
+
+
+def test_a_provider_failure_after_a_coarse_hit_keeps_the_hit(db: Session, make_order) -> None:
+    streets = GeocodeResult(
+        status=GeocodeStatus.AMBIGUOUS,
+        candidates=[GeoCandidate("улица Айни, Пахтакор, Худжанд", CITY_LAT, CITY_LNG, "street")],
+        provider="fake",
+    )
+    order = _order_with_address(make_order, "ул. Айни 12а, возле рынка Корвон")
+    geocoder = _RecordingGeocoder({"Худжанд, улица Айни, 12а": streets}, default=failed_result("fake", "timeout"))
+
+    GeocodingService(db, geocoder=geocoder).geocode_delivery(order.delivery)
+
+    assert geocoder.calls == ["Худжанд, улица Айни, 12а", "Худжанд, улица Айни, 12"]
+    assert order.delivery.geocode_status == GeocodeStatus.AMBIGUOUS
+    assert order.delivery.geocode_candidates[0]["formatted"] == "улица Айни, Пахтакор, Худжанд"
+
+
 # --------------------------------------------------------------------------- address parsing
 
 
@@ -750,6 +843,11 @@ def test_rank_candidates_folds_a_poi_into_the_plain_house() -> None:
         ("Пахтакор 46 мкр д. 12", {"district": "Пахтакор", "microdistrict": "46", "house": "12"}),
         ("возле рынка Корвон", {"landmark": "рынка Корвон"}),
         ("Испечак, дом 3, ориентир: школа №5", {"house": "3", "landmark": "Школа №5", "rest": "Испечак"}),
+        # live Nominatim check of 18.09.2026
+        ("12 мкр, 5 дом", {"microdistrict": "12", "house": "5"}),  # the number before "дом"
+        ("34 мкр 10/2", {"microdistrict": "34", "house": "10/2"}),
+        ("Панчшанбе бозор", {"landmark": "Панчшанбе бозор"}),  # a landmark without "возле"
+        ("18 мкр, магазин Анвар", {"microdistrict": "18", "landmark": "магазин Анвар"}),
         ("", {}),
     ],
 )
@@ -784,14 +882,47 @@ def test_geocode_queries_ladder() -> None:
         ("house", "Худжанд, улица Айни, 12"),
         ("street", "Худжанд, улица Айни"),
     ]
+    # the landmark comes before the centroid, in the form OSM names it ("школа 5", not "Школа №5")
     assert [
         (q.level, q.text) for q in geocode_queries(parse_address("Испечак, дом 3, ориентир: школа №5"), "Худжанд")
     ] == [
         ("house", "Худжанд, Испечак, 3"),
+        ("landmark", "Худжанд, школа 5"),
         ("raw", "Худжанд, Испечак"),
-        ("landmark", "Худжанд, Школа №5"),
+    ]
+    # "10/2" is rarely in OSM, its main building "10" often is
+    assert [(q.level, q.text) for q in geocode_queries(parse_address("34 мкр 10/2"), "Худжанд")] == [
+        ("house", "Худжанд, 34 мкр, 10/2"),
+        ("house", "Худжанд, 34 мкр, 10"),
+        ("microdistrict", "Худжанд, 34 микрорайон"),
+        ("microdistrict", "Худжанд, 34 мкр"),
+    ]
+    # a named area is the last resort when the street is not in OSM under that name
+    assert [q.text for q in geocode_queries(parse_address("Пахтакор, Бухоро 5"), "Худжанд")] == [
+        "Худжанд, улица Бухоро, 5",
+        "Худжанд, улица Бухоро",
+        "Худжанд, Пахтакор",
     ]
     assert geocode_queries(parse_address("Худжанд"), "Худжанд") == []
+
+
+@pytest.mark.parametrize(
+    ("landmark", "expected"),
+    [
+        # live Nominatim: the first form of each is found, the customer's own wording is not
+        ("рынка Панчшанбе", ["рынок Панчшанбе", "Панчшанбе"]),
+        ("Панчшанбе бозор", ["рынок Панчшанбе", "Панчшанбе"]),
+        ("26 школы", ["школа 26"]),
+        ("школы №26", ["школа 26"]),
+        ("мактаби 26", ["школа 26"]),
+        ("торгового центра Ватан", ["ТЦ Ватан", "Ватан"]),
+        ("банк Эсхата", ["банк Эсхата"]),  # a branch name is kept as written
+        ("Шелкокомбинат", ["Шелкокомбинат"]),  # no type word: as written
+        ("", []),
+    ],
+)
+def test_landmark_variants(landmark: str, expected: list[str]) -> None:
+    assert landmark_variants(landmark) == expected
 
 
 def test_candidate_matches_rejects_only_contradictions() -> None:

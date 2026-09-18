@@ -864,6 +864,9 @@ export interface RouteStopOut {
   address: string;
   latitude: number;
   longitude: number;
+  /** The point is the place the geocoder found (microdistrict, street, landmark), not the house itself. */
+  approximate: boolean;
+  approximate_place: string | null;
   eta: ISOTime | null;
   desired_time: ISOTime | null;
   lateness_min: number;

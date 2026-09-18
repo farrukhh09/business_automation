@@ -11,7 +11,6 @@
 """
 
 import logging
-import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -19,14 +18,24 @@ import httpx
 
 from app.core.exceptions import IntegrationError
 from app.core.logging import get_logger, log_event
-from app.integrations.maps.types import DistanceMatrixProvider
+from app.integrations.maps.types import EARTH_RADIUS_M, DistanceMatrixProvider, haversine_m
 
 logger = get_logger(__name__)
+
+__all__ = [
+    "EARTH_RADIUS_M",
+    "HAVERSINE",
+    "OSRM",
+    "DistanceMatrixError",
+    "FallbackDistanceProvider",
+    "HaversineMatrix",
+    "OsrmMatrix",
+    "haversine_m",
+]
 
 HAVERSINE = "haversine"
 OSRM = "osrm"
 
-EARTH_RADIUS_M = 6371000.0
 # Straight line → street network correction (06 §2).
 ROAD_FACTOR = 1.3
 DEFAULT_SPEED_KMH = 25.0
@@ -43,16 +52,6 @@ class DistanceMatrixError(IntegrationError):
 
     code = "routing_error"
     default_detail = "Сервис маршрутизации недоступен"
-
-
-def haversine_m(first: tuple[float, float], second: tuple[float, float]) -> float:
-    """Great-circle distance in metres between two ``(lat, lng)`` points."""
-    lat1, lng1 = math.radians(first[0]), math.radians(first[1])
-    lat2, lng2 = math.radians(second[0]), math.radians(second[1])
-    delta_lat = lat2 - lat1
-    delta_lng = lng2 - lng1
-    a = math.sin(delta_lat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lng / 2) ** 2
-    return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
 
 
 class HaversineMatrix:
@@ -112,9 +111,7 @@ class OsrmMatrix:
         if size == 0:
             return [], []
         if size > OSRM_MAX_POINTS:
-            raise DistanceMatrixError(
-                "Слишком много точек для расчёта маршрута", provider=OSRM, points=size
-            )
+            raise DistanceMatrixError("Слишком много точек для расчёта маршрута", provider=OSRM, points=size)
         # OSRM takes coordinates as lng,lat.
         coordinates = ";".join(f"{lng:.6f},{lat:.6f}" for lat, lng in points)
         url = f"{self._base_url}{OSRM_TABLE_PATH}{coordinates}"
@@ -132,7 +129,9 @@ class OsrmMatrix:
         except ValueError as exc:
             raise self._fail("invalid_response", status=response.status_code) from exc
         if not isinstance(payload, dict) or payload.get("code") != "Ok":
-            raise self._fail("provider_error", provider_code=str(payload.get("code")) if isinstance(payload, dict) else None)
+            raise self._fail(
+                "provider_error", provider_code=str(payload.get("code")) if isinstance(payload, dict) else None
+            )
 
         durations = _square_matrix(payload.get("durations"), size)
         distances = _square_matrix(payload.get("distances"), size)

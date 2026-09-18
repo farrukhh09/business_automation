@@ -8,12 +8,19 @@ than its house numbers. So instead of one query with the whole text:
 1. :func:`parse_address` splits the text into structured parts (district, microdistrict number,
    street with a normalized type word, house, apartment/entrance/floor, landmark). Apartment,
    entrance and floor are kept for the courier and never sent to a geocoder (personal data, and
-   they cannot improve coordinates).
-2. :func:`geocode_queries` builds a ladder of queries from the most to the least precise: street +
-   house → street only; microdistrict + house → microdistrict only; landmark; the raw text as the
-   last resort. The caller stops at the first query that yields usable candidates.
+   they cannot improve coordinates). A landmark is recognised after "возле"/"рядом с"/"ориентир"…
+   and also without them, by its type word ("Панчшанбе бозор", "магазин Анвар").
+2. :func:`geocode_queries` builds a ladder of queries from the most to the least precise: the
+   house (street + house, microdistrict + house; for "10/2" or "12а" also the main number "10" /
+   "12" — OSM rarely has the fraction); the landmark in the form OSM names it ("возле рынка
+   Панчшанбе" → "рынок Панчшанбе", "Панчшанбе"; "26 школы" → "школа 26"); then the street or the
+   microdistrict alone; the raw text as the last resort. The caller stops at the first house and
+   prefers a landmark to a street/microdistrict centroid (``GeocodingService``).
 3. :func:`candidate_matches` rejects a geocoder's fuzzy guesses: asked for the 18th microdistrict,
    Nominatim happily returns the 91st, the 112th and the 11th — those are not the address.
+
+The ladder was checked against live Nominatim on 20 typical Khujand addresses (18.09.2026): before,
+5 of them were found to the house; the causes of the rest are documented next to each rule below.
 
 Tajik address words are mapped to their Russian counterparts (кӯча → улица, хиёбон → проспект,
 ноҳия → район), Tajik letters are folded, so "кӯчаи Рӯдакӣ" and "улица Рудаки" are the same query.
@@ -31,11 +38,13 @@ __all__ = [
     "ParsedAddress",
     "candidate_matches",
     "geocode_queries",
+    "landmark_variants",
     "parse_address",
 ]
 
-#: How many geocoder calls one address may cost (the public Nominatim allows one per second).
-MAX_QUERIES = 3
+#: How many geocoder calls one address may cost (the public Nominatim allows one per second). Four:
+#: the house, its main number or the landmark, and the street/microdistrict centroid as the fallback.
+MAX_QUERIES = 4
 
 LEVEL_HOUSE = "house"
 LEVEL_STREET = "street"
@@ -81,6 +90,50 @@ _HOUSE_RE = re.compile(
     r"\b(?:дом|д\.|хонаи|хона|уй)\s*№?\s*(\d+\s*[а-яa-z]?(?:\s*/\s*\d+)?(?:\s*(?:корп\.?|корпус|к\.)\s*\d+)?)",
     re.IGNORECASE,
 )
+#: "12 мкр, 5 дом" — the number before the word (live: this house was lost and only the microdistrict searched).
+_HOUSE_BEFORE_RE = re.compile(
+    r"\b(\d+\s*[а-яa-z]?(?:\s*/\s*\d+)?)\s*-?\s*(?:ый\s*|й\s*)?(?:дом|хона)(?![а-яa-z])", re.IGNORECASE
+)
+#: The main number of "10/2", "12а", "7 к1" — OSM in Khujand usually has only the main building number.
+_BASE_HOUSE_RE = re.compile(r"^(\d+)")
+
+# Landmark type words, folded lower case (all the forms customers write, Russian cases and Tajik
+# izafat) → the nominative Russian word OSM uses in Khujand's names ("Рынок Панчшанбе", "Школа 26").
+# Live Nominatim: "рынок Панчшанбе" and "школа 26" are found, "рынка Панчшанбе", "Панчшанбе бозор" and
+# "26 школы" are not (18.09.2026).
+_LANDMARK_TYPES: dict[str, str] = {
+    **dict.fromkeys(("рынок", "рынка", "рынке", "рынку", "базар", "базара", "базаре", "бозор", "бозори"), "рынок"),
+    **dict.fromkeys(("школа", "школы", "школе", "школу", "мактаб", "мактаби"), "школа"),
+    **dict.fromkeys(("мечеть", "мечети", "масчид", "масчиди"), "мечеть"),
+    **dict.fromkeys(("больница", "больницы", "больнице", "беморхона", "беморхонаи"), "больница"),
+    **dict.fromkeys(("поликлиника", "поликлиники", "поликлинике"), "поликлиника"),
+    **dict.fromkeys(("садик", "садика", "детсад", "детсада", "кудакистон", "кудакистони"), "детский сад"),
+    **dict.fromkeys(("магазин", "магазина", "магазине", "магоза", "магозаи", "супермаркет", "супермаркета"), "магазин"),
+    **dict.fromkeys(("остановка", "остановки", "остановке", "истгох", "истгохи"), "остановка"),
+    **dict.fromkeys(("тц", "трц"), "ТЦ"),
+    **dict.fromkeys(("парк", "парка", "парке", "боги"), "парк"),
+    **dict.fromkeys(("университет", "университета", "донишгох", "донишгохи"), "университет"),
+    **dict.fromkeys(("аптека", "аптеки", "аптеке", "дорухона", "дорухонаи"), "аптека"),
+    **dict.fromkeys(("ресторан", "ресторана", "кафе", "чайхана", "чайханы"), "ресторан"),
+    **dict.fromkeys(("стадион", "стадиона"), "стадион"),
+    **dict.fromkeys(("вокзал", "вокзала"), "вокзал"),
+    **dict.fromkeys(("мост", "моста"), "мост"),
+    **dict.fromkeys(("театр", "театра", "кинотеатр", "кинотеатра"), "театр"),
+    **dict.fromkeys(("гостиница", "гостиницы", "отель", "отеля", "мехмонхона"), "гостиница"),
+    **dict.fromkeys(("банк", "банка", "почта", "почты"), ""),  # kept as written: "банк Эсхата" is a branch name
+}
+#: Folded words that may stand between the type word and the name ("торговый центр Ватан" → "ТЦ Ватан").
+_LANDMARK_PHRASES: dict[str, str] = {
+    "торговый центр": "тц",
+    "торгового центра": "тц",
+    "торговом центре": "тц",
+    "детский сад": "детсад",
+    "детского сада": "детсад",
+    "маркази савдо": "тц",
+    "маркази савдои": "тц",
+}
+_NUMBER_SIGN_RE = re.compile(r"№\s*")
+_LANDMARK_WORD_RE = re.compile(r"[a-zа-яё]+|\d+", re.IGNORECASE)
 _STREET_TYPES: dict[str, str] = {
     "ул": "улица",
     "ул.": "улица",
@@ -215,6 +268,8 @@ def parse_address(raw: str | None) -> ParsedAddress:
 
     microdistrict, work = take(_MICRODISTRICT_RE, work)
     house, work = take(_HOUSE_RE, work)
+    if house is None:
+        house, work = take(_HOUSE_BEFORE_RE, work)
     if house:
         house = _normalize_house(house)
 
@@ -247,6 +302,9 @@ def parse_address(raw: str | None) -> ParsedAddress:
             work = cleaned[: trailing.start()]
 
     rest = _clean(re.sub(r"[,;]\s*[,;]", ",", work))
+    if landmark is None and rest and _landmark_type(rest) is not None:
+        # "Панчшанбе бозор", "18 мкр, магазин Анвар": a landmark written without "возле".
+        landmark, rest = rest, ""
     return ParsedAddress(
         raw=original,
         district=district,
@@ -261,8 +319,53 @@ def parse_address(raw: str | None) -> ParsedAddress:
     )
 
 
+def _landmark_words(text: str) -> list[str]:
+    folded = tajik_fold(_NUMBER_SIGN_RE.sub("", text)).lower().replace("ё", "е")
+    for phrase, replacement in _LANDMARK_PHRASES.items():
+        folded = re.sub(rf"\b{phrase}\b", replacement, folded)
+    return _LANDMARK_WORD_RE.findall(folded)
+
+
+def _landmark_type(text: str) -> str | None:
+    """The nominative type word of a landmark ("рынок", "школа", "" for a name kept as written), or None."""
+    return next((_LANDMARK_TYPES[word] for word in _landmark_words(text) if word in _LANDMARK_TYPES), None)
+
+
+def landmark_variants(landmark: str | None) -> list[str]:
+    """How OSM names the landmark, best first: "рынка Панчшанбе" → ["рынок Панчшанбе", "Панчшанбе"],
+    "26 школы" / "школы №26" → ["школа 26"], "Панчшанбе бозор" → ["рынок Панчшанбе", "Панчшанбе"],
+    "ТЦ Ватан" → ["ТЦ Ватан", "Ватан"]. Text without a type word is searched as written."""
+    text = _clean(landmark)
+    if not text:
+        return []
+    words = _landmark_words(text)
+    kind = next((_LANDMARK_TYPES[word] for word in words if word in _LANDMARK_TYPES), None)
+    if not kind:
+        return [text]
+    name_words = [word for word in words if word not in _LANDMARK_TYPES]
+    if not name_words:
+        return [text]
+    name = " ".join(word if word.isdigit() else _title(word) for word in name_words)
+    variants = [f"{kind} {name}"]
+    if not all(word.isdigit() for word in name_words) and len(name) >= 4:
+        variants.append(name)  # "Панчшанбе" alone finds the market, its stop and the bazaar area
+    return list(dict.fromkeys(variants))
+
+
+def _base_house(house: str | None) -> str | None:
+    """ "10/2" → "10", "12а" → "12", "7 к1" → "7"; ``None`` when the number is already plain."""
+    if not house:
+        return None
+    match = _BASE_HOUSE_RE.match(house)
+    return match.group(1) if match and match.group(1) != house else None
+
+
 def geocode_queries(parsed: ParsedAddress, city: str) -> list[AddressQuery]:
-    """The query ladder for one address, most precise first (at most :data:`MAX_QUERIES` entries)."""
+    """The query ladder for one address, most precise first (at most :data:`MAX_QUERIES` entries).
+
+    Order: the house (then its main number), the landmark, the street / microdistrict centroid, the
+    raw text. ``GeocodingService`` stops at the first house found; a landmark hit beats a centroid.
+    """
     city_part = _clean(city)
     prefix = f"{city_part}, " if city_part else ""
     queries: list[AddressQuery] = []
@@ -271,33 +374,36 @@ def geocode_queries(parsed: ParsedAddress, city: str) -> list[AddressQuery]:
         if len(queries) < MAX_QUERIES and all(query.text != text for query in queries):
             queries.append(AddressQuery(text=text, level=level, parts=parts))
 
+    # Khujand in OpenStreetMap (checked 17.09.2026): buildings carry addr:street "31 мкр" / "34 МКР",
+    # the places are "28 микрорайон" / "29-й мкр". "28-й микрорайон" finds other microdistricts only,
+    # and "31 микрорайон, 28" finds the microdistrict but not its house 28 — hence "мкр" with a house.
+    number = parsed.microdistrict
+    locality = parsed.rest if not parsed.street and not number else ""
+    houses = [parsed.house, _base_house(parsed.house)] if parsed.house else []
+    for house in (value for value in houses if value):
+        if parsed.street:
+            add(f"{prefix}{parsed.street}, {house}", LEVEL_HOUSE, street=parsed.street, house=house)
+        elif number:
+            add(f"{prefix}{number} мкр, {house}", LEVEL_HOUSE, microdistrict=number, house=house)
+        elif locality:
+            # "Испечак, дом 3", "Зарафшон 12": a locality or a street written without its type word.
+            add(f"{prefix}{locality}, {house}", LEVEL_HOUSE, house=house)
+    for variant in landmark_variants(parsed.landmark)[:2]:
+        add(f"{prefix}{variant}", LEVEL_LANDMARK, landmark=variant)
     if parsed.street:
-        if parsed.house:
-            add(f"{prefix}{parsed.street}, {parsed.house}", LEVEL_HOUSE, street=parsed.street, house=parsed.house)
         add(f"{prefix}{parsed.street}", LEVEL_STREET, street=parsed.street)
-    if parsed.microdistrict:
-        # Khujand in OpenStreetMap (checked 17.09.2026): buildings carry addr:street "31 мкр" / "34 МКР",
-        # the places are "28 микрорайон" / "29-й мкр". "28-й микрорайон" finds other microdistricts only,
-        # and "31 микрорайон, 28" finds the microdistrict but not its house 28 — hence "мкр" with a house.
-        number = parsed.microdistrict
-        if parsed.house and not parsed.street:
-            add(f"{prefix}{number} мкр, {parsed.house}", LEVEL_HOUSE, microdistrict=number, house=parsed.house)
+    if number:
         add(f"{prefix}{number} микрорайон", LEVEL_MICRODISTRICT, microdistrict=number)
         add(f"{prefix}{number} мкр", LEVEL_MICRODISTRICT, microdistrict=number)
-    if not parsed.street and not parsed.microdistrict and parsed.rest:
-        # "Испечак, дом 3", "Зарафшон 12": a locality or a street written without its type word.
-        if parsed.house:
-            add(f"{prefix}{parsed.rest}, {parsed.house}", LEVEL_HOUSE, house=parsed.house)
-        add(f"{prefix}{parsed.rest}", LEVEL_RAW)
-    if parsed.landmark:
-        add(f"{prefix}{parsed.landmark}", LEVEL_LANDMARK, landmark=parsed.landmark)
+    if locality:
+        add(f"{prefix}{locality}", LEVEL_RAW)
+    if parsed.district:
+        # "Пахтакор, Бухоро 5": the street is not in OSM under that name — the named area still is.
+        add(f"{prefix}{parsed.district}", LEVEL_DISTRICT, district=parsed.district)
     if not queries:
-        if parsed.district:
-            add(f"{prefix}{parsed.district}", LEVEL_DISTRICT, district=parsed.district)
-        else:
-            raw = _clean(_CITY_RE.sub(" ", parsed.raw))
-            if raw:
-                add(f"{prefix}{raw}", LEVEL_RAW)
+        raw = _clean(_CITY_RE.sub(" ", parsed.raw))
+        if raw:
+            add(f"{prefix}{raw}", LEVEL_RAW)
     return queries
 
 

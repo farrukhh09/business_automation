@@ -47,6 +47,14 @@ function StopRow({ stop, index }: { stop: RouteStopOut; index: number }) {
               </p>
             ) : null}
             {stop.courier_comment ? <p className="text-xs text-slate-500 italic">«{stop.courier_comment}»</p> : null}
+            {stop.approximate ? (
+              <p className="mt-1 text-xs text-amber-700">
+                Точка примерная: {stop.approximate_place ?? "дом не найден на карте"} — курьеру позвонить клиенту.{" "}
+                <Link href={`/orders/${stop.order_id}`} className="underline">
+                  Уточнить точку
+                </Link>
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="shrink-0 text-right">
@@ -59,6 +67,7 @@ function StopRow({ stop, index }: { stop: RouteStopOut; index: number }) {
         <span>·</span>
         <span>{formatDuration(stop.duration_from_prev_s)} в пути</span>
         {late ? <Badge tone="red">Опоздание на {stop.lateness_min} мин</Badge> : null}
+        {stop.approximate ? <Badge tone="amber">примерная точка</Badge> : null}
       </div>
     </li>
   );
@@ -117,9 +126,10 @@ export function RoutePanel({ date, deliveries, warehouse }: RoutePanelProps) {
         id: stop.delivery_id,
         lat: stop.latitude,
         lng: stop.longitude,
-        tone: "stop",
+        // An approximate point (the microdistrict, a landmark) looks like a geocoder candidate, not a house.
+        tone: stop.approximate ? "candidate" : "stop",
         number: stop.sequence,
-        label: stop.address,
+        label: stop.approximate ? `${stop.address} (примерно: ${stop.approximate_place ?? "дом не найден"})` : stop.address,
       }));
       const routePoints: [number, number][] = [
         [plan.start.latitude, plan.start.longitude],
@@ -183,7 +193,18 @@ export function RoutePanel({ date, deliveries, warehouse }: RoutePanelProps) {
                 Старт {formatTime(plan.start_time)} от «{plan.start.name}»
               </span>
               <span>Расстояние: {formatDistance(plan.total_distance_m)}</span>
-              <span>Время в пути: {formatDuration(plan.total_duration_s)}</span>
+              {/* total_duration_s includes waiting for the delivery windows — only the legs are "в пути" */}
+              <span>
+                В пути: {formatDuration(plan.stops.reduce((sum, stop) => sum + stop.duration_from_prev_s, 0))}
+              </span>
+              {plan.stops.length > 0 ? (
+                <span>Последняя точка: {formatTime(plan.stops[plan.stops.length - 1].eta)}</span>
+              ) : null}
+              {plan.stops.some((stop) => stop.approximate) ? (
+                <Badge tone="amber">
+                  {plan.stops.filter((stop) => stop.approximate).length} из {plan.stops.length} — примерные точки
+                </Badge>
+              ) : null}
               {plan.distance_source === "haversine" ? (
                 <Badge tone="amber">оценка по прямой — OSRM не настроен</Badge>
               ) : null}

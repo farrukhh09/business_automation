@@ -131,7 +131,7 @@
 
 `DeliveryOut = {id, order_id, address_raw, address_formatted, city, district, microdistrict, street, house, apartment, entrance, floor, landmark, latitude, longitude, location_source, geocode_status, geocode_provider, geocode_candidates, recipient_name, recipient_phone, courier_comment, status, dispatch_provider, external_id, external_status, courier_name, courier_phone, dispatched_at, delivered_at, created_at, updated_at}`
 `DeliveryListItem = DeliveryOut + {order: {id, status, payment_status, total_amount, paid_amount, delivery_date, delivery_time, items_summary, customer: {id, name, phone}}}`
-`RoutePlanOut = {id, delivery_date, start: {name, latitude, longitude}, start_time, algorithm, distance_source, total_distance_m, total_duration_s, created_at, stops: [{sequence, delivery_id, order_id, address, latitude, longitude, eta, desired_time, lateness_min, distance_from_prev_m, duration_from_prev_s, recipient_name, phone, courier_comment, items_summary}], unlocated: [{delivery_id, order_id, address, reason}]}`
+`RoutePlanOut = {id, delivery_date, start: {name, latitude, longitude}, start_time, algorithm, distance_source, total_distance_m, total_duration_s, created_at, stops: [{sequence, delivery_id, order_id, address, latitude, longitude, approximate, approximate_place, eta, desired_time, lateness_min, distance_from_prev_m, duration_from_prev_s, recipient_name, phone, courier_comment, items_summary}], unlocated: [{delivery_id, order_id, address, reason}]}` (`approximate=true` — точка не дом, а место, найденное геокодером: микрорайон, улица, ориентир; `approximate_place` — его название, 03 §7)
 `DispatchResultOut = {delivery: DeliveryOut, provider, requires_operator: bool, instructions: string, copy_text: string}`
 
 ## 10. FAQ

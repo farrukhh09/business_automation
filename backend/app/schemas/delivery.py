@@ -197,6 +197,9 @@ class RouteStopOut(BaseModel):
     address: str
     latitude: float
     longitude: float
+    #: The point is not the address but the place the geocoder found (microdistrict, street, landmark).
+    approximate: bool = False
+    approximate_place: str | None = None
     eta: HHMM | None = None
     desired_time: HHMM | None = None
     lateness_min: int = 0

@@ -7,6 +7,8 @@ a human: several candidates or low precision → ``AMBIGUOUS`` (the bot offers t
 the map link), nothing at all → ``NOT_FOUND``, a provider failure → ``FAILED``.
 """
 
+import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -54,12 +56,61 @@ class GeoCandidate:
 
 _PRECISION_RANK = {precision: index for index, precision in enumerate(PRECISIONS)}
 
+EARTH_RADIUS_M = 6371000.0
+#: Two house results with the same number on the same street/microdistrict closer than this are one
+#: address. OpenStreetMap often maps a building and a separate address point, or every entrance
+#: ("1-2 подъезд, 29, 12 микрорайон"): live Nominatim gave "115, улица Гагарина" twice, 132 m apart
+#: (18.09.2026). Offering the customer two identical lines to choose from helps nobody.
+SAME_ADDRESS_RADIUS_M = 300.0
+
+
+def haversine_m(first: tuple[float, float], second: tuple[float, float]) -> float:
+    """Great-circle distance in metres between two ``(lat, lng)`` points."""
+    lat1, lng1 = math.radians(first[0]), math.radians(first[1])
+    lat2, lng2 = math.radians(second[0]), math.radians(second[1])
+    a = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lng2 - lng1) / 2) ** 2
+    return 2 * EARTH_RADIUS_M * math.asin(min(1.0, math.sqrt(a)))
+
+
+_ENTRANCE_PART_RE = re.compile(r"подъезд|подъезды|даромадгох", re.IGNORECASE)
+_HOUSE_NUMBER_PART_RE = re.compile(r"^\d+\s*[а-яa-z]?(?:\s*/\s*\d+)?$", re.IGNORECASE)
+
+
+def address_key(formatted: str) -> tuple[str, str] | None:
+    """``("115", "улица гагарина")`` for "115, улица Гагарина, Кӯйи Қозӣ, …" — the house number and the
+    street (or microdistrict) that follows it; entrance labels ("7-8 подъезд") are skipped. ``None``
+    when the text does not start with a house number."""
+    parts = [part.strip() for part in (formatted or "").split(",") if part.strip()]
+    parts = [part for part in parts if not _ENTRANCE_PART_RE.search(part)]
+    if len(parts) < 2 or not _HOUSE_NUMBER_PART_RE.match(parts[0]):
+        return None
+    number = re.sub(r"\s+", "", parts[0]).lower()
+    street = " ".join(parts[1].lower().replace("ё", "е").split())
+    return number, street
+
+
+def _merge_same_address(candidates: list[GeoCandidate]) -> list[GeoCandidate]:
+    """Drop a house result that repeats an earlier one's address nearby (see ``SAME_ADDRESS_RADIUS_M``)."""
+    kept: list[GeoCandidate] = []
+    for candidate in candidates:
+        key = address_key(candidate.formatted) if candidate.precision == PRECISION_HOUSE else None
+        duplicate = key is not None and any(
+            other.precision == PRECISION_HOUSE
+            and address_key(other.formatted) == key
+            and haversine_m((other.lat, other.lng), (candidate.lat, candidate.lng)) <= SAME_ADDRESS_RADIUS_M
+            for other in kept
+        )
+        if not duplicate:
+            kept.append(candidate)
+    return kept
+
 
 def rank_candidates(candidates: Sequence[GeoCandidate]) -> list[GeoCandidate]:
     """Most precise first, addresses before points of interest; the provider order otherwise.
 
     A point of interest at a house that is also present as a plain address is dropped: "ТехМаркет,
-    12, улица Айни" and "12, улица Айни" are one place, not two variants to choose from.
+    12, улица Айни" and "12, улица Айни" are one place, not two variants to choose from. So is a house
+    result that repeats the address of an earlier one nearby (``_merge_same_address``).
     """
     ordered = sorted(
         enumerate(candidates),
@@ -71,7 +122,7 @@ def rank_candidates(candidates: Sequence[GeoCandidate]) -> list[GeoCandidate]:
         if candidate.is_poi and candidate.precision == PRECISION_HOUSE and has_plain_house:
             continue
         result.append(candidate)
-    return result
+    return _merge_same_address(result)
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,10 +5,15 @@ The service owns the *decision*, the adapter only talks to the provider:
 - a point set by a person (``CUSTOMER_PIN`` / ``OPERATOR`` / ``COURIER``) is never overwritten —
   ``GEOCODER`` is the least trusted source (03 §7), so such a delivery is skipped entirely;
 - the customer's text is parsed into parts (``app.integrations.maps.address``) that are stored on the
-  delivery for the courier, and geocoded through a **ladder** of queries: street + house, then the
-  street alone; microdistrict + house, then the microdistrict alone; a landmark. The first query with
-  usable candidates wins — OpenStreetMap knows Dushanbe's streets and microdistricts far better than
-  its house numbers, so an address is rarely "not found" at all, only "not found to the house";
+  delivery for the courier, and geocoded through a **ladder** of queries: the house (street + house or
+  microdistrict + house, then the main number of "10/2"), the landmark, the street / microdistrict
+  alone. The first **house** found wins. Until then the best coarse hit is remembered — a landmark
+  beats a street, a street beats a microdistrict, both beat the city — and the centroid queries are
+  skipped once a street/microdistrict is already known. OpenStreetMap knows Khujand's streets and
+  microdistricts far better than its house numbers, so an address is rarely "not found" at all, only
+  "not found to the house";
+- a landmark is where the customer is *near*, never the address: its hits are never auto-accepted
+  (their precision is lowered to ``other``) and only those inside the city bbox count;
 - candidates that contradict the query are dropped (a geocoder asked for the 18th microdistrict must
   not answer with the 91st), points of interest at a house are folded into that house; a point outside
   the city bbox is kept for the operator but never auto-accepted;
@@ -21,6 +26,7 @@ The service owns the *decision*, the adapter only talks to the provider:
 """
 
 import logging
+from dataclasses import replace
 
 from sqlalchemy.orm import Session
 
@@ -28,7 +34,12 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import BusinessRuleError, IntegrationError, IntegrationNotConfiguredError
 from app.core.logging import get_logger, log_event
 from app.integrations.maps.address import (
+    LEVEL_DISTRICT,
     LEVEL_HOUSE,
+    LEVEL_LANDMARK,
+    LEVEL_MICRODISTRICT,
+    LEVEL_RAW,
+    LEVEL_STREET,
     AddressQuery,
     ParsedAddress,
     candidate_matches,
@@ -37,11 +48,16 @@ from app.integrations.maps.address import (
 )
 from app.integrations.maps.factory import get_geocoder
 from app.integrations.maps.types import (
+    PRECISION_DISTRICT,
     PRECISION_HOUSE,
+    PRECISION_OTHER,
+    PRECISION_STREET,
+    GeoCandidate,
     Geocoder,
     GeocodeResult,
     decide_status,
     failed_result,
+    inside_bbox,
     rank_candidates,
 )
 from app.models.delivery import Delivery
@@ -54,6 +70,27 @@ SKIP_MANUAL = "manual_location"
 SKIP_NO_ADDRESS = "no_address"
 
 __all__ = ["GeocodingService", "SKIP_MANUAL", "SKIP_NO_ADDRESS"]
+
+#: Coarse hits, best first: a landmark (a point the customer is near), a street, a microdistrict or
+#: district, anything else (the city, an unknown place).
+_COARSE_SCORES = {PRECISION_STREET: 1, PRECISION_DISTRICT: 2}
+_LANDMARK_SCORE = 0
+_OTHER_SCORE = 3
+#: What any hit of a centroid query is, whatever precision the provider gives it ("28 микрорайон" comes
+#: back as a plain "place" — it is still the microdistrict that was asked for).
+_LEVEL_SCORES = {LEVEL_STREET: 1, LEVEL_MICRODISTRICT: 2, LEVEL_DISTRICT: 2}
+#: Once a hit at least this good is known, the street / microdistrict centroid queries add nothing.
+_KNOWN_AREA_SCORE = 2
+_CENTROID_LEVELS = frozenset({LEVEL_STREET, LEVEL_MICRODISTRICT, LEVEL_RAW, LEVEL_DISTRICT})
+
+
+def _coarse_score(query: AddressQuery, candidates: list[GeoCandidate]) -> int:
+    if query.level == LEVEL_LANDMARK:
+        return _LANDMARK_SCORE
+    by_precision = min(
+        (_COARSE_SCORES.get(candidate.precision, _OTHER_SCORE) for candidate in candidates), default=_OTHER_SCORE
+    )
+    return min(by_precision, _LEVEL_SCORES.get(query.level, _OTHER_SCORE))
 
 
 class GeocodingService:
@@ -153,19 +190,28 @@ class GeocodingService:
         return delivery
 
     def _geocode_ladder(self, queries: list[AddressQuery]) -> tuple[GeocodeResult, AddressQuery | None]:
-        """Run the ladder until a query yields usable candidates (or the provider fails)."""
+        """Run the ladder until a house is found; otherwise return the best coarse hit (see the module
+        docstring). A provider failure ends the ladder: the coarse hit found so far, else ``FAILED``."""
         bbox = self.settings.city_bbox
-        last: GeocodeResult | None = None
-        last_query: AddressQuery | None = None
+        coarse: tuple[GeocodeResult, AddressQuery, int] | None = None
+        last: tuple[GeocodeResult, AddressQuery] | None = None
         for query in queries:
+            if coarse is not None and coarse[2] <= _KNOWN_AREA_SCORE and query.level in _CENTROID_LEVELS:
+                continue  # the street / microdistrict (or a landmark) is already known
             result = self._geocode(query.text)
             if result.status == GeocodeStatus.FAILED:
-                return result, query
+                return (coarse[0], coarse[1]) if coarse is not None else (result, query)
             # Candidates that contradict the query are dropped; a point outside the city bbox is kept
             # (a suburb delivery is possible) but never auto-accepted — ``decide_status`` handles that.
             candidates = rank_candidates(
                 [candidate for candidate in result.candidates if candidate_matches(query, candidate.formatted)]
             )
+            if query.level == LEVEL_LANDMARK:
+                candidates = [
+                    replace(candidate, precision=PRECISION_OTHER)
+                    for candidate in candidates
+                    if inside_bbox(candidate.lat, candidate.lng, bbox)
+                ]
             houses = [candidate for candidate in candidates if candidate.precision == PRECISION_HOUSE]
             if len(houses) == 1 and query.level == LEVEL_HOUSE:
                 # One house among streets/districts ("ТехМаркет, 12, улица Айни" next to "улица Айни"):
@@ -174,10 +220,19 @@ class GeocodingService:
             filtered = GeocodeResult(
                 status=decide_status(candidates, bbox), candidates=candidates, provider=result.provider
             )
-            if candidates:
+            if houses:
                 return filtered, query
-            last, last_query = filtered, query
-        return last or failed_result(self.settings.GEOCODER_PROVIDER, "no_queries"), last_query
+            if not candidates:
+                last = (filtered, query)
+                continue
+            score = _coarse_score(query, candidates)
+            if coarse is None or score < coarse[2]:
+                coarse = (filtered, query, score)
+        if coarse is not None:
+            return coarse[0], coarse[1]
+        if last is not None:
+            return last
+        return failed_result(self.settings.GEOCODER_PROVIDER, "no_queries"), None
 
     def _geocode(self, query: str) -> GeocodeResult:
         """Adapter call; every failure becomes a ``FAILED`` result (03 §7)."""

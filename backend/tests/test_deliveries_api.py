@@ -1,14 +1,24 @@
 """Deliveries API — docs/architecture/04-api.md §9, 03-business-rules.md §7 (SPEC §45 "Доставка")."""
 
+import pytest
+
 from app.core.time import business_today
 from app.integrations.maps.types import GeoCandidate, GeocodeResult
-from app.models.enums import DeliveryType
+from app.models.enums import DeliveryType, GeocodeStatus
+from tests.bot_fakes import CITY_LAT, CITY_LNG
 
 
 def _set_warehouse(client, admin_headers, lat="38.560000", lng="68.774000"):
     response = client.put(
         "/api/settings",
-        json={"warehouse": {"name": "Кухня", "address": "ул. Складская, 1", "latitude": float(lat), "longitude": float(lng)}},
+        json={
+            "warehouse": {
+                "name": "Кухня",
+                "address": "ул. Складская, 1",
+                "latitude": float(lat),
+                "longitude": float(lng),
+            }
+        },
         headers=admin_headers,
     )
     assert response.status_code == 200, response.text
@@ -77,9 +87,12 @@ def test_geocode_endpoint_applies_the_provider_result(client, admin_headers, mak
         candidates=[GeoCandidate(formatted="Худжанд, ул. Рудаки, 1", lat=40.29, lng=69.62, precision="house")],
         provider="fake",
     )
-    monkeypatch.setattr("app.services.geocoding_service.get_geocoder", lambda settings: type(
-        "FakeGeocoder", (), {"name": "fake", "geocode": staticmethod(lambda query, **kw: fake_result)}
-    )())
+    monkeypatch.setattr(
+        "app.services.geocoding_service.get_geocoder",
+        lambda settings: type(
+            "FakeGeocoder", (), {"name": "fake", "geocode": staticmethod(lambda query, **kw: fake_result)}
+        )(),
+    )
     response = client.post(f"/api/deliveries/{order.delivery.id}/geocode", headers=admin_headers)
     assert response.status_code == 200
     body = response.json()
@@ -185,8 +198,54 @@ def test_optimize_reports_unlocated_deliveries(client, admin_headers, make_order
     assert [item["order_id"] for item in body["unlocated"]] == [unlocated.id]
 
 
+def test_an_approximately_found_address_rides_on_its_approximate_point(client, admin_headers, make_order, db):
+    """18.09.2026: OSM rarely has Khujand's house numbers, so most deliveries were AMBIGUOUS without
+    coordinates and every route of the test days was empty. The best stored candidate inside the city now
+    places the stop, marked ``approximate`` with the place named; a delivery with nothing stays unlocated."""
+    _set_warehouse(client, admin_headers, lat=str(CITY_LAT), lng=str(CITY_LNG))
+    exact = _delivery_order(make_order, latitude=f"{CITY_LAT + 0.01:.6f}", longitude=f"{CITY_LNG:.6f}")
+    approximate = _delivery_order(make_order)
+    approximate.delivery.geocode_status = GeocodeStatus.AMBIGUOUS
+    approximate.delivery.geocode_candidates = [
+        {
+            "formatted": "28 микрорайон, г.Худжанд, Согдийская область, 735700, Таджикистан",
+            "lat": CITY_LAT + 0.02,
+            "lng": CITY_LNG,
+            "precision": "other",
+        }
+    ]
+    outside = _delivery_order(make_order)  # a candidate outside the city is not a point for the courier
+    outside.delivery.geocode_status = GeocodeStatus.AMBIGUOUS
+    outside.delivery.geocode_candidates = [{"formatted": "Душанбе", "lat": 38.56, "lng": 68.77, "precision": "city"}]
+    nothing = _delivery_order(make_order)
+    nothing.delivery.geocode_status = GeocodeStatus.NOT_FOUND
+    db.commit()
+    day = exact.delivery_date.isoformat()
+
+    body = client.post("/api/deliveries/optimize", json={"date": day}, headers=admin_headers).json()
+
+    stops = {stop["order_id"]: stop for stop in body["stops"]}
+    assert set(stops) == {exact.id, approximate.id}
+    assert stops[exact.id]["approximate"] is False and stops[exact.id]["approximate_place"] is None
+    assert stops[approximate.id]["approximate"] is True
+    assert stops[approximate.id]["approximate_place"] == "28 микрорайон, г.Худжанд"
+    assert stops[approximate.id]["latitude"] == pytest.approx(CITY_LAT + 0.02)
+    assert sorted(item["order_id"] for item in body["unlocated"]) == sorted([outside.id, nothing.id])
+
+    # the customer then changes the address: the stored stop has no point any more — listed, not a 500
+    approximate.delivery.geocode_status = GeocodeStatus.PENDING
+    approximate.delivery.geocode_candidates = []
+    db.commit()
+    latest = client.get("/api/deliveries/routes", params={"date": day}, headers=admin_headers)
+    assert latest.status_code == 200
+    assert [stop["order_id"] for stop in latest.json()["stops"]] == [exact.id]
+    assert approximate.id in [item["order_id"] for item in latest.json()["unlocated"]]
+
+
 def test_get_routes_without_a_plan_returns_null(client, admin_headers):
-    response = client.get("/api/deliveries/routes", params={"date": business_today().isoformat()}, headers=admin_headers)
+    response = client.get(
+        "/api/deliveries/routes", params={"date": business_today().isoformat()}, headers=admin_headers
+    )
     assert response.status_code == 200
     assert response.json() is None
 
