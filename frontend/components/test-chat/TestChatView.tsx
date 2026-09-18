@@ -15,6 +15,7 @@ import { useToast } from "@/components/ui/Toast";
 import { queryKeys } from "@/lib/query";
 import { testChatApi } from "@/services/api";
 import { isApiError } from "@/services/http";
+import type { TestChatOut } from "@/types/api";
 
 const STORAGE_KEY = "bakery-admin.test-chat.customer-key";
 
@@ -52,17 +53,26 @@ export function TestChatView() {
   });
 
   const [sending, setSending] = useState(false);
-  const send = async (text: string) => {
+  const deliver = async (request: Promise<TestChatOut>, failure: string) => {
     if (!customerKey) return;
     setSending(true);
     try {
-      const next = await testChatApi.sendMessage(customerKey, { text });
-      queryClient.setQueryData(queryKeys.testChat.detail(customerKey), next);
+      queryClient.setQueryData(queryKeys.testChat.detail(customerKey), await request);
     } catch (err) {
-      toast.apiError(err, "Не удалось отправить сообщение");
+      toast.apiError(err, failure);
     } finally {
       setSending(false);
     }
+  };
+
+  const send = (text: string) => {
+    if (!customerKey) return;
+    void deliver(testChatApi.sendMessage(customerKey, { text }), "Не удалось отправить сообщение");
+  };
+
+  const sendImage = (file: File, text: string) => {
+    if (!customerKey) return;
+    void deliver(testChatApi.sendImage(customerKey, file, text), "Не удалось отправить изображение");
   };
 
   const [resetOpen, setResetOpen] = useState(false);
@@ -109,7 +119,8 @@ export function TestChatView() {
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-3 text-sm sm:p-4">
         <span className="text-slate-500">
           Пишите сюда как клиент — сообщения проходят через настоящего бота, но никуда не
-          отправляются.
+          отправляются. Изображение (например, чек об оплате) можно выбрать по 📎, перетащить в
+          поле ввода или вставить из буфера обмена.
         </span>
         {data ? <ConversationModeBadge mode={data.mode} /> : null}
         {data?.conversation_id ? (
@@ -135,7 +146,13 @@ export function TestChatView() {
           )}
         </div>
 
-        <MessageComposer disabled={!customerKey} sending={sending} onSend={send} />
+        <MessageComposer
+          disabled={!customerKey}
+          sending={sending}
+          onSend={send}
+          onSendImage={sendImage}
+          onImageRejected={(message) => toast.error(message)}
+        />
       </div>
 
       <ConfirmDialog

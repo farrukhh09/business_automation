@@ -170,8 +170,14 @@
 | GET | /test-chat/{customer_key} | STAFF | → `TestChatOut` (пустой, если ещё не было сообщений) |
 |---|---|---|---|
 | POST | /test-chat/{customer_key}/messages | STAFF | `{text}` (1..2000) → `TestChatOut`, сообщение проходит весь путь `DialogService`, как настоящее от клиента |
+| POST | /test-chat/{customer_key}/images | STAFF | `multipart/form-data`: `file` (JPEG/PNG/WebP/GIF, ≤ 10 МБ) + `text` (подпись, необязательно, ≤ 2000) → `TestChatOut` |
 
 `TestChatOut = {conversation_id: int|null, mode, needs_attention, messages: MessageOut[]}`
+
+Загруженный файл сохраняется в `MEDIA_ROOT` так же, как скачанное вложение Instagram, и сообщение
+приходит боту как обычное IMAGE (`InboundMessageService.handle_event(..., stored_image=...)` —
+скачивать нечего, CDN-ссылки нет). Так проверяется разбор чека об оплате (03 §3). Неподходящий файл
+— 422 `validation_error`.
 
 ## 12. Settings
 

@@ -122,7 +122,15 @@ class InboundMessageService:
 
     # ================================================================== webhook event
 
-    def handle_event(self, event: InstagramEvent | Mapping[str, Any]) -> InboundResult:
+    def handle_event(
+        self, event: InstagramEvent | Mapping[str, Any], *, stored_image: str | None = None
+    ) -> InboundResult:
+        """``stored_image`` names a file already saved in ``MEDIA_ROOT`` — nothing to download.
+
+        That is how a picture from the admin panel's test chat arrives (04 §11a): the file is
+        uploaded by a staff member instead of being fetched from the Instagram CDN. A real webhook
+        never passes it.
+        """
         if not isinstance(event, InstagramEvent):
             event = InstagramEvent.model_validate(event)
         if not event.is_customer_message or event.is_deleted:
@@ -168,7 +176,7 @@ class InboundMessageService:
         if message.message_type == MessageType.VOICE:
             return self._receive_voice(message, event)
         if message.message_type == MessageType.IMAGE:
-            self._store_image(message, event)
+            self._store_image(message, event, stored_image)
         return self.process_message(message)
 
     def _customer(self, event: InstagramEvent) -> Customer:
@@ -206,10 +214,16 @@ class InboundMessageService:
             return self._voice_failed(message, VOICE_QUEUE_FAILED)
         return InboundResult(STATUS_VOICE_QUEUED, message.id)
 
-    def _store_image(self, message: Message, event: InstagramEvent) -> None:
-        """Images are kept for the operator (03 §6: a design request is the operator's decision)."""
+    def _store_image(self, message: Message, event: InstagramEvent, stored: str | None = None) -> None:
+        """Images are kept for the operator (03 §6: a design request is the operator's decision).
+
+        ``stored`` is a file already saved in ``MEDIA_ROOT`` (the admin panel's test chat), so there
+        is nothing to download.
+        """
         attachment = next(iter(event.image_attachments), None)
-        if attachment is not None and attachment.url is not None:
+        if stored is not None:
+            message.media_url = self.media.url_path(stored)
+        elif attachment is not None and attachment.url is not None:
             try:
                 data, content_type = self._resolve_messenger().download_attachment(attachment.url)
                 filename = self.media.save(data, prefix=INCOMING_PREFIX, extension=extension_for(content_type, "jpg"))

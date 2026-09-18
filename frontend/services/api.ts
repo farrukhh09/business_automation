@@ -222,6 +222,13 @@ export const testChatApi = {
   get: (customerKey: string) => http.get<TestChatOut>(`/test-chat/${seg(customerKey)}`),
   sendMessage: (customerKey: string, body: SendMessageRequest) =>
     http.post<TestChatOut>(`/test-chat/${seg(customerKey)}/messages`, body),
+  /** A picture as if the customer had sent it (a payment receipt above all), with an optional caption */
+  sendImage: (customerKey: string, file: File, text?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (text?.trim()) form.append("text", text.trim());
+    return http.post<TestChatOut>(`/test-chat/${seg(customerKey)}/images`, form);
+  },
 };
 
 /* 12. Settings */
@@ -247,7 +254,15 @@ export const healthApi = {
   ready: () => http.get<unknown>("/health/ready", undefined, { auth: false }),
 };
 
-/** URL of a TTS media file served by `GET /media/{filename}` (public). */
-export function mediaUrl(filename: string): string {
-  return `/api/media/${seg(filename)}`;
+/**
+ * URL of a media file served by `GET /media/{filename}` (public).
+ *
+ * Takes a bare file name or a ready URL: `MessageOut.audio_url` / `media_url` (04 §11) are already
+ * relative `/api/media/...` links — and `media_url` may even be an Instagram CDN link when the
+ * download failed — so anything that is a URL is passed through unchanged.
+ */
+export function mediaUrl(fileOrPath: string): string {
+  const value = fileOrPath.trim();
+  if (value.startsWith("/") || /^https?:\/\//i.test(value)) return value;
+  return `/api/media/${seg(value)}`;
 }

@@ -47,10 +47,10 @@ function MessageContent({ message }: { message: MessageOut }) {
       return <p className={clsx("text-sm italic", mutedClass)}>Изображение недоступно</p>;
     }
     return (
-      <a href={message.media_url} target="_blank" rel="noreferrer" className="block">
+      <a href={mediaUrl(message.media_url)} target="_blank" rel="noreferrer" className="block">
         {/* eslint-disable-next-line @next/next/no-img-element -- external/proxied media, not a build-time asset */}
         <img
-          src={message.media_url}
+          src={mediaUrl(message.media_url)}
           alt="Вложение"
           className="max-h-56 w-full max-w-64 rounded-lg object-cover"
           loading="lazy"

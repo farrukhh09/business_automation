@@ -9,6 +9,10 @@ Every message goes through the exact same path as a real Instagram message
 (``InboundMessageService.handle_event``). Nothing is ever sent anywhere: the outgoing reply is
 marked FAILED with an explanatory note, exactly like the console script, so the admin panel shows
 honestly that it never left the system.
+
+A picture (a payment receipt above all, 03 §3) can be uploaded too: the file is saved in
+``MEDIA_ROOT`` exactly as a downloaded Instagram image and the event carries an ``image``
+attachment without a URL — there is no CDN link to invent, and nothing is downloaded from anywhere.
 """
 
 import uuid
@@ -18,18 +22,25 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.time import now_utc
 from app.models.conversation import Conversation
 from app.services.customer_service import CustomerService
 from app.services.inbound_service import InboundMessageService
+from app.services.media_storage import INCOMING_PREFIX, extension_for
 from app.services.messaging_service import MessagingService
 
-__all__ = ["TestChatService", "TestChatDisabledError"]
+__all__ = ["TestChatService", "TestChatDisabledError", "IMAGE_MEDIA_TYPES", "MAX_IMAGE_BYTES"]
 
 ACCOUNT_ID = "webtest"
 CUSTOMER_NAME = "Тестовый клиент (админка)"
 NOT_SENT_NOTE = "Тестовый чат в админке: ответ не отправлялся, показан только в интерфейсе"
+
+IMAGE_MEDIA_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"})
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+IMAGE_EMPTY = "Файл пустой"
+IMAGE_TYPE_NOT_SUPPORTED = "Можно отправить только изображение: JPEG, PNG, WebP или GIF"
+IMAGE_TOO_LARGE = "Изображение слишком большое: максимум 10 МБ"
 
 
 class TestChatDisabledError(NotFoundError):
@@ -80,9 +91,28 @@ class TestChatService:
 
     def send(self, customer_key: str, text: str) -> Conversation:
         """Simulates one incoming customer message; returns the (fresh) conversation."""
+        return self._deliver(customer_key, text=text)
+
+    def send_image(
+        self, customer_key: str, data: bytes, content_type: str | None, *, text: str | None = None
+    ) -> Conversation:
+        """Simulates one incoming picture (with an optional caption): a receipt, a cake photo…"""
+        return self._deliver(customer_key, text=text, image=self._save_image(data, content_type))
+
+    def _save_image(self, data: bytes, content_type: str | None) -> str:
+        media_type = (content_type or "").split(";", 1)[0].strip().lower()
+        if not data:
+            raise ValidationError(detail=IMAGE_EMPTY)
+        if media_type not in IMAGE_MEDIA_TYPES:
+            raise ValidationError(detail=IMAGE_TYPE_NOT_SUPPORTED)
+        if len(data) > MAX_IMAGE_BYTES:
+            raise ValidationError(detail=IMAGE_TOO_LARGE)
+        return self.inbound.media.save(data, prefix=INCOMING_PREFIX, extension=extension_for(media_type, "jpg"))
+
+    def _deliver(self, customer_key: str, *, text: str | None, image: str | None = None) -> Conversation:
         CustomerService(self.db).get_or_create_by_instagram_id(customer_key, name=CUSTOMER_NAME)
         self.db.commit()
-        event = {
+        event: dict[str, Any] = {
             "account_id": ACCOUNT_ID,
             "sender_id": customer_key,
             "recipient_id": ACCOUNT_ID,
@@ -90,7 +120,10 @@ class TestChatService:
             "mid": f"webtest-{uuid.uuid4().hex}",
             "text": text,
         }
-        self.inbound.handle_event(event)
+        if image is not None:
+            event["attachments"] = [{"type": "image"}]  # the file is ours already, so there is no url
+            event["raw_type"] = "image"
+        self.inbound.handle_event(event, stored_image=image)
         self._mark_not_sent()
         conversation = self.conversation_for(customer_key)
         assert conversation is not None  # handle_event just created it

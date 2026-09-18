@@ -68,6 +68,7 @@ CONTRACT_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("POST", "/api/conversations/{conversation_id}/read"),
     ("GET", "/api/test-chat/{customer_key}"),
     ("POST", "/api/test-chat/{customer_key}/messages"),
+    ("POST", "/api/test-chat/{customer_key}/images"),
     ("GET", "/api/settings"),
     ("PUT", "/api/settings"),
     ("GET", "/api/settings/integrations"),
