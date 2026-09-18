@@ -124,6 +124,15 @@ def test_weak_evidence_keeps_the_dialog_language() -> None:
         "ин ай чи тайер меша?",
         "тортро фардо мегирам",
         "salom, tort mexoham",  # Latin transliteration
+        # Khujand dialect (live dialog #8, 18.09.2026): "-даги", "манба", "якта", "числава", "-ми", "боша"
+        "Салом алейкум, хамин 2 синнамон заказ мекадаги",
+        "Манба якта фисташковый и якта ягодный",
+        "19 числава соати 20:00",
+        "доставка мешава ми?",
+        "пагох мешадми?",
+        "боша, нагз",
+        "худам гирифта мебурдаги",
+        "шоколад кати якта, ягодный кати якта",
     ],
 )
 def test_colloquial_and_latin_tajik(text: str) -> None:
@@ -145,3 +154,5 @@ def test_strict_mode_scores_tajik_letters_instead_of_deciding() -> None:
 
 def test_russian_words_that_look_like_tajik_verbs() -> None:
     assert detect_language("торт с медовиком и менеджером", None, "tg") == "ru"
+    # "мера", "Кати", "местами" are Russian words, not the Khujand "мера"/"кати" forms
+    assert detect_language("это для Кати, мера обычная, местами", None, "tg") == "ru"

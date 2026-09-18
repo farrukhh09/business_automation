@@ -375,6 +375,7 @@ class InboundMessageService:
                     "source": reply.source.value,
                     "language": reply.language,
                     "violations": list(reply.violations),
+                    "fixes": list(reply.fixes),
                 }
             },
         )

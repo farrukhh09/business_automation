@@ -1,11 +1,20 @@
 """Reply templates and the responder (05-ai.md §6): template-only kinds, LLM wording, guard fallbacks."""
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
 
 from app.ai import templates
-from app.ai.responder import TEMPLATE_KINDS, ReplyKind, ReplyPlan, ReplySource, Responder, fact_amounts
+from app.ai.responder import (
+    TEMPLATE_KINDS,
+    ReplyKind,
+    ReplyPlan,
+    ReplySource,
+    Responder,
+    fact_amounts,
+    strip_greeting,
+)
 from tests.bot_fakes import ScriptedLLM
 
 SUMMARY_FACTS = {
@@ -47,7 +56,7 @@ def test_summary_template_follows_spec_12() -> None:
 
 def test_summary_template_in_tajik() -> None:
     text = templates.render("ORDER_SUMMARY", "tg", {**SUMMARY_FACTS, "delivery_type": "PICKUP", "address": None})
-    assert text.startswith("Лутфан, фармоишро санҷед:\n\nКрасный бархат — 1 дона\n")
+    assert text.startswith("Фармоишатонро тафтиш кунед:\n\nКрасный бархат — 1 дона\n")
     assert "Худатон мегиред: ҳа" in text
     assert "Ҳамагӣ: 1 500 сомонӣ." in text
     assert text.endswith("Ҳама дуруст? Барои тасдиқ «Ҳа» нависед.")
@@ -100,7 +109,8 @@ def test_small_talk_templates() -> None:
     assert (
         templates.render("SMALL_TALK", "ru", {"small_talk": "thanks"}) == "Пожалуйста! Будем рады видеть вас снова 😊"
     )
-    assert templates.render("SMALL_TALK", "tg", {"small_talk": "goodbye"}).startswith("Хайр, рӯзи хуш!")
+    assert templates.render("SMALL_TALK", "tg", {"small_talk": "goodbye"}).startswith("Хайр!")
+    assert templates.render("SMALL_TALK", "tg", {"small_talk": "thanks"}) == "Саломат бошед! Боз биёед 😊"
     # "ок" while the draft is being filled → only the pending questions
     assert templates.render("SMALL_TALK", "ru", {"small_talk": "ack"}, ["phone"]) == (
         "Напишите, пожалуйста, номер телефона для связи."
@@ -113,9 +123,7 @@ def test_small_talk_templates() -> None:
 def test_greeting_template_answers_in_kind() -> None:
     assert templates.render("GREETING", "ru", {"greeting": "day"}) == "Добрый день! Что желаете заказать? 😊"
     assert templates.render("GREETING", "ru", {"greeting": "evening"}) == "Добрый вечер! Что желаете заказать? 😊"
-    assert templates.render("GREETING", "tg", {"greeting": "salam"}) == (
-        "Ва алейкум ассалом! Чӣ фармоиш додан мехоҳед? 😊"
-    )
+    assert templates.render("GREETING", "tg", {"greeting": "salam"}) == "Ва алейкум ассалом! Чӣ фармоиш медиҳед? 😊"
     assert templates.render("GREETING", "ru", {}) == "Здравствуйте! Что желаете заказать? 😊"
     assert templates.render("GREETING", "ru", {"greeting": True}) == "Здравствуйте! Что желаете заказать? 😊"
     # an open draft: its questions or the confirmation reminder replace "Что желаете заказать?"
@@ -170,7 +178,28 @@ def test_timing_notes_name_the_past_date_and_the_earliest_slot() -> None:
         {"timing_problem": "delivery_too_soon", "earliest_date": "2026-09-20", "earliest_time": "10:00"},
         [],
     )
-    assert "Барвақттарин — 20.09.2026 баъд аз соати 10:00." in soon_tg
+    assert "Аз ҳама барвақт — 20.09.2026 баъд аз соати 10:00." in soon_tg
+
+
+def test_tajik_templates_use_the_khujand_register() -> None:
+    """18.09.2026: the customers read northern colloquial Tajik — "раҳмат", "тайёр", "адрес", "доставка",
+    "курер", "перевод" — not the literary "ташаккур", "омода", "суроға", "интиқол", "хаткашон"."""
+    facts = {**SUMMARY_FACTS, "prepayment": {"wallet": "+992 92 000 00 00", "amount": "750.00", "banks": ""}}
+    confirmed = templates.render("ORDER_CONFIRMED", "tg", facts)
+    assert confirmed.startswith("Раҳмат! Фармоиши №12 тасдиқ шуд ✅\nДоставка: 16.09.2026, соати 18:00.")
+    assert "гузаронед" in confirmed and "скриншоти переводро" in confirmed
+    questions = templates.render("ASK_MISSING", "tg", {}, ["delivery_type", "address"])
+    assert questions == (
+        "Илтимос, аниқ кунед:\n1. Расонем ё худатон мегиред?\n"
+        "2. Адреси расонданро нависед: микрорайон ё кӯча, хона, квартира ва ориентир."
+    )
+    receipt = templates.render(
+        "RECEIPT_RESULT", "tg", {"order_id": 12, "amount": "750.00", "wallet": "5058270381156297"}
+    )[:60]
+    assert receipt.startswith("Чекро гирифтем, раҳмат! Перевод: 750 сомонӣ.")
+    literary = ("ташаккур", "омода", "суроға", "интиқол", "хаткашон", "бигӯед", "мутаассифона", "бубахшед", "ҳуҷра")
+    every_text = " ".join(templates._TEXTS["tg"].values()).lower() + " ".join(templates.FIELD_QUESTIONS["tg"].values())
+    assert not any(word in every_text.lower() for word in literary), [w for w in literary if w in every_text.lower()]
 
 
 @pytest.mark.parametrize("kind", [kind.value for kind in ReplyKind])
@@ -208,7 +237,9 @@ def test_llm_wording_is_used_when_the_guard_accepts_it() -> None:
 
     reply = responder.generate_reply(plan)
 
-    assert reply.source == ReplySource.LLM and reply.text == "Здравствуйте! Медовик стоит 750 сомони 😊"
+    # the customer did not greet in this message (no ``greeting`` fact): the model's opener is dropped
+    assert reply.source == ReplySource.LLM and reply.text == "Медовик стоит 750 сомони 😊"
+    assert reply.fixes == ("greeting_removed",)
     assert "KIND: PRODUCT_INFO" in llm.text_calls[0]["prompt"]
 
 
@@ -261,6 +292,49 @@ def test_item_choices_and_refusals_are_never_worded_by_the_model() -> None:
     assert (reply.source, reply.text) == (ReplySource.TEMPLATE, "Чтобы подтвердить заказ №7, напишите «Да».")
     thanks = ReplyPlan(ReplyKind.SMALL_TALK, "ru", {"small_talk": "thanks"})
     assert Responder(ScriptedLLM(reply="Рады помочь!")).generate_reply(thanks).source == ReplySource.LLM
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Ва алейкум ассалом! Навиштем. Фармоиш барои кадом рӯз лозим?", "Навиштем. Фармоиш барои кадом рӯз лозим?"),
+        ("Ваалейкум ассалом, навиштем!", "Навиштем!"),
+        ("Салом! навиштем", "Навиштем"),
+        ("Ассалому алейкум! Медовик ҳаст.", "Медовик ҳаст."),
+        ("Здравствуйте! Записали, на какой день?", "Записали, на какой день?"),
+        ("Добрый день, записали.", "Записали."),
+        ("Привет! Записали.", "Записали."),
+        ("Рӯз ба хайр! Навиштем.", "Навиштем."),
+    ],
+)
+def test_a_greeting_opener_is_stripped(text: str, expected: str) -> None:
+    assert strip_greeting(text) == (expected, True)
+
+
+@pytest.mark.parametrize("text", ["Саломат бошед! Боз биёед", "Навиштем, салом ба ҳама", "Записали. Здравствуйте?"])
+def test_greeting_words_elsewhere_are_kept(text: str) -> None:
+    assert strip_greeting(text) == (text, False)
+
+
+def test_a_repeated_greeting_is_removed_from_the_model_reply() -> None:
+    """Live Tajik dialog of 18.09.2026: the model copied "Ва алейкум ассалом!" from the history into every
+    later reply. Without a ``greeting`` fact the opener goes, the rest of the wording stays (``fixes``)."""
+    llm = ScriptedLLM(reply="Ва алейкум ассалом! Навиштем. Фармоиш барои кадом рӯз лозим?")
+    plan = ReplyPlan(ReplyKind.ASK_MISSING, "tg", {}, ["delivery_date"], question_hint="Фармоиш барои кадом рӯз лозим?")
+
+    reply = Responder(llm).generate_reply(plan)
+
+    assert (reply.source, reply.text) == (ReplySource.LLM, "Навиштем. Фармоиш барои кадом рӯз лозим?")
+    assert reply.fixes == ("greeting_removed",) and reply.violations == ()
+
+    # the customer greeted in this very message: the greeting is answered and kept
+    greeted = Responder(llm).generate_reply(replace(plan, facts={"greeting": "salam"}))
+    assert greeted.text.startswith("Ва алейкум ассалом! ") and greeted.fixes == ()
+
+    # nothing but a greeting → the template of the kind
+    bare = Responder(ScriptedLLM(reply="Салом!")).generate_reply(plan)
+    assert bare.source == ReplySource.FALLBACK and "empty_reply" in bare.violations
+    assert bare.text == "Фармоиш барои кадом рӯз лозим?"
 
 
 def test_llm_error_falls_back_to_the_template() -> None:

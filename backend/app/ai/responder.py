@@ -10,6 +10,10 @@ fields); this module only decides *how* it is worded:
   checked by ``ResponseGuard`` (money only from FACTS, no confirmation claims, no invented stock or
   discounts, no catalog product outside FACTS) and by a language check. Any LLM error, an empty
   answer or a violation falls back to the template of the same kind.
+- a greeting the model opens with when the customer did not greet in this very message is removed
+  before the checks (``strip_greeting``): the prompt forbids it, yet in a live Tajik dialog the model
+  kept copying the "Ва алейкум ассалом!" of the first reply from the history (18.09.2026). What was
+  corrected is reported in ``Reply.fixes``.
 """
 
 import logging
@@ -38,6 +42,7 @@ __all__ = [
     "ReplySource",
     "Responder",
     "fact_amounts",
+    "strip_greeting",
     "uses_template",
 ]
 
@@ -122,6 +127,8 @@ class Reply:
     language: str
     source: ReplySource
     violations: tuple[str, ...] = ()
+    #: What was corrected in the model's text before it was accepted ("greeting_removed").
+    fixes: tuple[str, ...] = ()
 
 
 def uses_template(plan: ReplyPlan) -> bool:
@@ -192,6 +199,39 @@ def _fact_strings(facts: Mapping[str, Any]) -> list[str]:
     return [str(value) for _, value in _walk(facts) if isinstance(value, str) and value.strip()]
 
 
+# --------------------------------------------------------------------------- greeting opener
+
+#: A greeting at the very start of a reply, Russian or Tajik, in any of the spellings the customers
+#: and the model use: "Здравствуйте!", "Добрый день,", "Салом!", "Ассалому алейкум!", "Ва алейкум
+#: ассалом!", "Ваалейкум салом", "Рӯз ба хайр!". A letter right after the words means another word
+#: ("Саломат бошед!" is "you're welcome", not a greeting), so the lookahead requires a non-letter.
+_GREETING_OPENER_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:ва\s*)?ал[аеи]йкум\s+(?:ас-?салом[у]?|салом)"
+    r"|ас-?салом[у]?(?:\s+ал[аеи]йкум)?"
+    r"|салом(?:\s+ал[аеи]йкум)?"
+    r"|(?:субҳ|субх|рӯз|руз|шом)\s+ба\s+хайр"
+    r"|здравствуйте|здраствуйте|здравствуй|привет(?:ствую|ик)?"
+    r"|добр(?:ый|ое|ого)\s+(?:день|утро|вечер|времени\s+суток)"
+    r")(?![а-яёӣӯҳқғҷ])[\s!,.…:;—-]*",
+    re.IGNORECASE,
+)
+
+
+def strip_greeting(text: str) -> tuple[str, bool]:
+    """Remove a greeting opener from a reply: ``"Салом! Навиштем…"`` → ``("Навиштем…", True)``.
+
+    Used when the customer did not greet in this message (no ``greeting`` fact) and the kind is not
+    GREETING — the customer was already greeted earlier in the dialog. The remainder starts with a
+    capital letter; a reply that was nothing but a greeting comes back empty.
+    """
+    match = _GREETING_OPENER_RE.match(text)
+    if match is None:
+        return text, False
+    rest = text[match.end() :].lstrip()
+    return rest[:1].upper() + rest[1:], True
+
+
 # --------------------------------------------------------------------------- responder
 
 
@@ -218,13 +258,21 @@ class Responder:
         except LLMError as exc:
             return self._fallback(plan, template_text, (f"llm_error:{exc.reason}",))
 
+        fixes: list[str] = []
+        if plan.kind is not ReplyKind.GREETING and not plan.facts.get("greeting"):
+            # The customer did not greet in this message: a greeting here is the model repeating itself.
+            text, removed = strip_greeting(text)
+            if removed:
+                fixes.append("greeting_removed")
+                log_event(logger, "ai.reply_fixed", kind=plan.kind.value, language=plan.language, fixes=fixes)
+
         if not text:
             return self._fallback(plan, template_text, ("empty_reply",))
 
         violations = list(self._check(plan, text))
         if violations:
             return self._fallback(plan, template_text, tuple(violations))
-        return Reply(text, plan.kind, plan.language, ReplySource.LLM)
+        return Reply(text, plan.kind, plan.language, ReplySource.LLM, fixes=tuple(fixes))
 
     # ------------------------------------------------------------------ internals
 

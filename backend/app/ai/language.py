@@ -162,6 +162,66 @@ _TAJIK_STRONG = frozenset(
         "фахмидам",
         "нафахмидам",
         "намедонам",
+        # Khujand (northern) colloquial forms: "манба" = ба ман, "кати" = бо, "боша" = бошад,
+        # "мешава"/"меша" = мешавад, "хозир" = now, "тайёр" = ready, "нагз" = good, "-ми" = a question
+        "манба",
+        "боша",
+        "нагз",
+        "хозир",
+        "тайёр",
+        "тайер",
+        "чанта",
+        "пул",
+        "сум",
+        "зуд",
+        "истед",
+        "гап",
+        "хамту",
+        "аммо",
+        "лекин",
+        "факат",
+        "хеле",
+        "бисёр",
+        "бисер",
+        "калон",
+        "хурд",
+        "ака",
+        "апа",
+        "мешава",
+        "мешавами",
+        "мешами",
+        "мешадми",
+        "хастми",
+        "дорадми",
+        "доредми",
+        "мумкинми",
+        "лозимми",
+        "нестми",
+        "мегира",
+        "мекуна",
+        "мебиёра",
+        "мебиера",
+        "меоран",
+        "меоред",
+        "мебиёред",
+        "мебиеред",
+        "мегирен",
+        "мехохен",
+        "мекунен",
+        "нависен",
+        "расонен",
+        "расонем",
+        "мерасонем",
+        "гузаронед",
+        "фиристед",
+        "фиристам",
+        "навиштем",
+        "кадом",
+        "кадомаш",
+        "кадомашро",
+        "чиро",
+        "руз",
+        "рузи",
     }
 )
 
@@ -193,6 +253,10 @@ _TAJIK_WEAK = frozenset(
         "ха",
         "вай",
         "онхо",
+        "ми",  # the northern question particle written apart: "мешава ми?"
+        "мана",
+        "ку",
+        "кати",  # "with" in Khujand ("шоколад кати"); weak, because "Кати" is also a Russian name
     }
 )
 
@@ -359,9 +423,13 @@ _RUSSIAN_LATIN = frozenset(
 )
 
 # Tajik verb shapes: present "ме-…-ам/ем/ед/анд" ("мехохам", "мегирам", "мешавад"), negated
-# "на-ме-…", and the colloquial forms with a dropped vowel ("мекнам", "мегирм"). Russian words that
-# happen to fit ("медовиком", "менеджером", "местам") are excluded explicitly.
-_TAJIK_VERB_RE = re.compile(r"^(?:на)?ме[а-я]{2,}(?:ам|ем|ед|анд|ад|[бвгдзклмнпрстфхчш]м)$")
+# "на-ме-…", the colloquial forms with a dropped vowel ("мекнам", "мегирм"), the northern "-ен" for
+# "-ед" ("мегирен"), the "-даги" participle of Khujand speech ("мекадаги" = would like to) and the
+# question particle "-ми" glued to a verb ("мешавадми"). Russian words that happen to fit
+# ("медовиком", "менеджером", "местам") are excluded explicitly.
+_TAJIK_VERB_RE = re.compile(r"^(?:на)?ме[а-я]{2,}(?:(?:ам|ем|ед|ен|анд|ад|[бвгдзклмнпрстфхчш]м)(?:ми)?|даги)$")
+# "-даги" on any stem ("хостаги", "гирифтаги", "рафтаги"): no Russian word ends this way.
+_TAJIK_PARTICIPLE_RE = re.compile(r"^[а-я]{3,}даги$")
 _NOT_TAJIK_VERBS = frozenset(
     {
         "медовиком",
@@ -393,7 +461,7 @@ _WEAK_WEIGHT = 1
 
 def _tajik_shape(token: str) -> int:
     """Morphological evidence of Tajik for a word that is in no list."""
-    if _TAJIK_VERB_RE.match(token) and token not in _NOT_TAJIK_VERBS:
+    if (_TAJIK_VERB_RE.match(token) and token not in _NOT_TAJIK_VERBS) or _TAJIK_PARTICIPLE_RE.match(token):
         return _STRONG_WEIGHT
     if (
         len(token) >= _MIN_SUFFIXED_LENGTH

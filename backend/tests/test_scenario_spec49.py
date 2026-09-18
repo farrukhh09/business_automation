@@ -224,11 +224,11 @@ def test_spec_49_readiness_scenario(
 
     # 5. The same customer now writes in Tajik and gets Tajik answers.
     tajik_summary = user.says("Салом! Боз як медовик мехоҳам, пасфардо соати 12, худам мегирам")
-    assert tajik_summary.startswith("Салом! Лутфан, фармоишро санҷед:\n\nМедовик — 1 дона")
+    assert tajik_summary.startswith("Салом! Фармоишатонро тафтиш кунед:\n\nМедовик — 1 дона")
     assert tajik_summary.endswith("Ҳама дуруст? Барои тасдиқ «Ҳа» нависед.")
     tajik_confirmation = user.says("Ҳа")
     second = db.scalars(select(Order).where(Order.id != order.id)).one()
-    assert tajik_confirmation.startswith(f"Ташаккур! Фармоиши №{second.id} тасдиқ шуд ✅")
+    assert tajik_confirmation.startswith(f"Раҳмат! Фармоиши №{second.id} тасдиқ шуд ✅")
     assert second.status == OrderStatus.CONFIRMED and second.is_repeat_customer is True
     assert len(db.scalars(select(Customer)).all()) == 1
 

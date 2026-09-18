@@ -829,13 +829,12 @@ def test_tajik_customer_gets_tajik_templates(
 
     ask = bot.say(text)
 
-    assert reply_text(ask) == "Салом! Чанд дона лозим аст: Медовик?"
+    assert reply_text(ask) == "Салом! Чандто лозим: Медовик?"
     db.refresh(conversation.customer)
     assert conversation.customer.language.value == "tg"
     next_question = bot.say("1")
     assert reply_text(next_question) == (
-        "Лутфан, аниқ кунед:\n1. Расонидан лозим аст ё худатон мегиред?\n"
-        "2. Лутфан, рақами телефонатонро барои тамос нависед."
+        "Илтимос, аниқ кунед:\n1. Расонем ё худатон мегиред?\n2. Рақами телефонатонро нависед."
     )
 
 

@@ -188,6 +188,8 @@ QUERY_INTENTS = frozenset(
     {Intent.FAQ, Intent.PRODUCT_QUERY, Intent.DELIVERY_QUERY, Intent.PAYMENT_QUERY, Intent.ORDER_STATUS}
 )
 ORDER_INTENTS = frozenset({Intent.CREATE_ORDER, Intent.CHANGE_ORDER})
+#: Questions ``_note_answers`` can answer inside an order reply (facts ``answers``).
+ANSWERED_QUERY_INTENTS = frozenset({Intent.FAQ, Intent.DELIVERY_QUERY, Intent.PAYMENT_QUERY})
 
 
 @dataclass(slots=True)
@@ -543,9 +545,14 @@ class DialogService:
     def _is_order_message(self, turn: _Turn, result: UnderstandingResult) -> bool:
         if result.intent in ORDER_INTENTS or ORDER_INTENTS & set(result.secondary_intents):
             return True
-        if result.intent in QUERY_INTENTS or result.intent == Intent.CANCEL_ORDER:
-            return False
         entities = result.entities
+        if result.intent in QUERY_INTENTS or result.intent == Intent.CANCEL_ORDER:
+            # "доставка мешава ми? 19-мкр, дом 5, подъезд 2" while the draft is open (live, 18.09.2026):
+            # the address is order data, the question is answered on the way (``_note_answers``). A bare
+            # delivery_type / payment_method is the topic of the question, not a choice — not enough.
+            return (
+                result.intent in ANSWERED_QUERY_INTENTS and self._draft(turn) is not None and _has_order_data(entities)
+            )
         if entities.items:
             return True
         return self._draft(turn) is not None and (_has_order_fields(entities) or entities.comment is not None)
@@ -795,9 +802,7 @@ class DialogService:
         }
         return self._finish(turn, ReplyPlan(ReplyKind.RECEIPT_RESULT, language, facts))
 
-    def _inspect_receipt(
-        self, turn: _Turn, llm: LLMClient, data: bytes, media_type: str
-    ) -> ReceiptInspection | None:
+    def _inspect_receipt(self, turn: _Turn, llm: LLMClient, data: bytes, media_type: str) -> ReceiptInspection | None:
         """The look of the screenshot (05 §9): only a hint, so a failed call just leaves it out."""
         try:
             return inspect_receipt(llm, data, media_type)
@@ -990,6 +995,11 @@ class DialogService:
         for position, mention in enumerate(mentions):
             product = by_id.get(mention.product_id) if mention.product_id is not None else None
             text = mention.product_text or (product.name if product is not None else "")
+            if product is not None and is_generic_mention(mention.product_text):
+                # "2 синнамон" came back with the id of "Классические синнамоны" (live, 18.09.2026): a bare
+                # category word names no flavour, so the id is the model's guess (prompt rule 3). The
+                # matcher decides instead: the only product of the kind, "какие именно?", or "нет в каталоге".
+                product = None
             if product is None and quantity_answer is not None:
                 product = by_id.get(quantity_answer)  # "2 коробки" answers "Сколько коробочек: Шоколадные?"
             if product is None:
@@ -1659,17 +1669,21 @@ class DialogService:
 
 
 def _has_order_fields(entities: Entities) -> bool:
+    return _has_order_data(entities) or entities.delivery_type is not None or entities.payment_method is not None
+
+
+def _has_order_data(entities: Entities) -> bool:
+    """Concrete order data — an address, a date, a phone… — unlike ``delivery_type`` / ``payment_method``,
+    which the model also fills in from the topic of a question ("доставка есть?")."""
     values = (
         entities.delivery_date,
         entities.delivery_time,
-        entities.delivery_type,
         entities.address,
         entities.recipient_name,
         entities.recipient_phone,
         entities.courier_comment,
         entities.customer_name,
         entities.phone,
-        entities.payment_method,
     )
     return any(value is not None for value in values)
 
@@ -1692,13 +1706,14 @@ def _is_abandoned(order: Order) -> bool:
 def _quantity_answer(state: DialogState, mentions: list[Any], matcher: ProductMatcher) -> int | None:
     """ "2 коробки" / "две коробки" to "Сколько коробочек нужно: Шоколадные синнамоны?" is that product's
     quantity, not two more boxes to choose: the only open question is a quantity, the message is one
-    counted category word, and the word fits the product (a box for a product sold by the box)."""
+    counted category word, and the word fits the product (a box for a product sold by the box). An id
+    the model attached to the category word is ignored here like everywhere else (``_apply_items``)."""
     pending = state.pending_items
     if len(pending) != 1 or pending[0]["kind"] != PENDING_QUANTITY or len(mentions) != 1:
         return None
     mention = mentions[0]
     text = mention.product_text or ""
-    if mention.product_id is not None or mention.quantity is None or not is_generic_mention(text):
+    if mention.quantity is None or not is_generic_mention(text):
         return None
     product_id = pending[0].get("product_id")
     return product_id if product_id is not None and product_id in matcher.match(text).candidates else None

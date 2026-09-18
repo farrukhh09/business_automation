@@ -220,7 +220,8 @@ def test_bare_greeting_is_answered_in_kind_without_the_model(
     db.refresh(bot.conversation)
     message = bot.conversation.messages[-1]
     assert message.ai_processed and message.intent == "GREETING"
-    assert reply_text(bot.say("Ассалому алейкум!")) == "Ва алейкум ассалом! Чӣ фармоиш додан мехоҳед? 😊"
+    assert reply_text(bot.say("Ассалому алейкум!")) == "Ва алейкум ассалом! Чӣ фармоиш медиҳед? 😊"
+    assert reply_text(bot.say("Саломалейкум")) == "Ва алейкум ассалом! Чӣ фармоиш медиҳед? 😊"
     assert reply_text(bot.say("Добрый вечер 🌸")) == "Добрый вечер! Что желаете заказать? 😊"
     assert llm.json_calls == [] and llm.text_calls == []
     db.refresh(bot.conversation)
@@ -249,6 +250,8 @@ def test_greeting_at_the_summary_reminds_to_confirm(
         ("Добрый вечер, есть синнамоны?", Greeting.EVENING),
         ("Здравствуйте, добрый день", Greeting.DAY),
         ("Ассалому алейкум", Greeting.SALAM),
+        ("Салом алейкум, хамин 2 синнамон заказ мекадаги", Greeting.SALAM),
+        ("Саломалейкум", Greeting.SALAM),
         ("Шом ба хайр", Greeting.EVENING),
         ("Салом", Greeting.HELLO),
         ("Хочу коробку классики", None),
@@ -274,12 +277,17 @@ def test_greeting_detector(text: str | None, expected: Greeting | None) -> None:
         ("Субҳ ба хайр, нарх?", SmallTalk.NONE),  # "ба" belongs to the greeting, it does not excuse "нарх"
         ("Спасибо большое!", SmallTalk.THANKS),
         ("рахмат", SmallTalk.THANKS),
+        ("Раҳмат калон!", SmallTalk.THANKS),
         ("Понял, спасибо", SmallTalk.THANKS),
         ("до свидания 👋", SmallTalk.GOODBYE),
         ("хайр", SmallTalk.GOODBYE),
         ("ок", SmallTalk.ACK),
         ("дальше", SmallTalk.ACK),
         ("ха хуб", SmallTalk.ACK),
+        ("боша", SmallTalk.ACK),  # Khujand "fine"
+        ("нағз", SmallTalk.ACK),
+        ("ҳамин, бас", SmallTalk.DONE),
+        ("тамом", SmallTalk.DONE),
         ("хорошо, в 18:00", SmallTalk.NONE),  # an answer, not an acknowledgement
         ("ок, доставка", SmallTalk.NONE),
         ("спасибо, а сколько стоит доставка?", SmallTalk.NONE),
@@ -832,7 +840,48 @@ def test_a_tajik_customer_naming_products_stays_in_tajik(
     second = bot.say("Красный бархат ва медовик")
 
     assert second.reply.language == "tg"
-    assert reply_text(second).startswith("Лутфан, аниқ кунед:")
+    assert reply_text(second).startswith("Илтимос, аниқ кунед:")
+
+
+def test_a_khujand_dialog_is_greeted_back_once(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Live dialog #8 (18.09.2026), in the Khujand dialect: after "Салом алейкум, …" the model opened every
+    later reply with "Ва алейкум ассалом!" again. The greeting is answered once, by the template; from the
+    model's later wording the opener is removed (``Reply.fixes``) and the rest is kept."""
+    first = "Салом алейкум, хамин 2 синнамон заказ мекадаги"
+    second = "Манба якта фисташковый и якта ягодный"
+    worded = "Фисташковые синнамоны ва ягодные синнамоныро навиштем. Фармоиш барои кадом рӯз лозим?"
+    llm = ScriptedLLM(
+        {
+            first: understanding(
+                language="tg",
+                intent="CREATE_ORDER",
+                secondary_intents=["GREETING"],
+                entities={"items": [item("синнамон", 2)], "items_mode": "add"},
+            ),
+            second: understanding(
+                language="tg",
+                intent="CHANGE_ORDER",
+                entities={
+                    "items": [item("фисташковый", 1, boxes["pistachio"].id), item("ягодный", 1, boxes["berry"].id)],
+                    "items_mode": "replace",
+                },
+            ),
+        },
+        reply=f"Ва алейкум ассалом! {worded}",
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    greeted = bot.say(first)
+    assert greeted.reply.language == "tg" and greeted.reply.source.value == "template"
+    assert reply_text(greeted).startswith("Ва алейкум ассалом! Кадомашро мегиред? Ҳозир дорем: ")
+
+    asked = bot.say(second)
+
+    assert asked.reply.source.value == "llm" and asked.reply.fixes == ("greeting_removed",)
+    assert reply_text(asked) == worded
+    assert sorted(line.product_name for line in bot.draft().items) == ["Фисташковые синнамоны", "Ягодные синнамоны"]
 
 
 # --------------------------------------------------------------------------- review of 17.09.2026
@@ -1002,6 +1051,42 @@ def test_a_refused_slot_replaces_the_stored_one(
     )
 
 
+def test_a_delivery_question_with_an_address_keeps_the_address(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Live (18.09.2026): "доставка мешава ми? 19-мкр, дом 5, подъезд 2" during an open draft was answered from
+    the settings, but the address was dropped and the bot went on to ask "доставка или самовывоз?". Concrete
+    order data inside a question is order data; a bare "доставка есть?" is still only a question."""
+    SettingsService(db).update({"delivery_info_text": "Доставка по городу — 20 сомони."})
+    address = "19 мкр, дом 5, подъезд 2"
+    llm = ScriptedLLM(
+        {
+            "2 ягодных": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("ягодных", 2, boxes["berry"].id)]}
+            ),
+            f"доставка есть? {address}": understanding(
+                intent="DELIVERY_QUERY", entities={"delivery_type": "DELIVERY", "address": address}
+            ),
+            "доставка есть?": understanding(intent="DELIVERY_QUERY", entities={"delivery_type": "DELIVERY"}),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm, geocoder=FakeGeocoder(single_house("Худжанд, 19 мкр, 5")))
+    bot.say("2 ягодных")
+
+    answered = bot.say(f"доставка есть? {address}")
+
+    assert reply_text(answered).startswith("Доставка по городу — 20 сомони.")
+    assert "доставка или самовывоз" not in reply_text(answered)
+    order = bot.draft()
+    # the address went through geocoding like any other: the single house found is written back
+    assert (order.delivery_type, order.delivery_address) == (DeliveryType.DELIVERY, "Худжанд, 19 мкр, 5")
+
+    other = Bot(db, make_conversation(), llm)
+    other.say("2 ягодных")
+    asked = other.say("доставка есть?")
+    assert asked.reply.kind == ReplyKind.DELIVERY_INFO and other.draft().delivery_type is None
+
+
 def test_a_greeting_inside_a_question_is_answered_back_by_the_model_too(
     db: Session, make_conversation: Callable[..., Conversation]
 ) -> None:
@@ -1054,6 +1139,43 @@ def test_boxes_answer_the_how_many_question(
 
     assert _items_of(bot) == [("Классические синнамоны", 2), ("Ягодные синнамоны", 2)]
     assert bot.state.pending_items == []
+
+
+def test_a_guessed_id_on_a_bare_category_word_is_not_trusted(
+    db: Session, boxes: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Live (18.09.2026): to "хамин 2 синнамон заказ мекадаги" the model attached the id of "Классические
+    синнамоны" and the order became 2 classic + the two flavours named next. A bare category word names
+    no flavour — the bot asks which ones. The same guessed id on "две коробки" still answers an open
+    quantity question."""
+    classic, berry, pistachio = boxes["classic"], boxes["berry"], boxes["pistachio"]
+    llm = ScriptedLLM(
+        {
+            "2 синнамон": understanding(intent="CREATE_ORDER", entities={"items": [item("синнамон", 2, classic.id)]}),
+            "фисташковый и ягодный": understanding(
+                intent="CREATE_ORDER",
+                entities={"items": [item("фисташковый", None, pistachio.id), item("ягодный", None, berry.id)]},
+            ),
+            "классические": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("классические", None, classic.id)]}
+            ),
+            "две коробки": understanding(intent="CREATE_ORDER", entities={"items": [item("коробки", 2, classic.id)]}),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    asked = bot.say("2 синнамон")
+
+    assert asked.reply.kind == ReplyKind.ASK_MISSING and _items_of(bot) == []
+    assert reply_text(asked).startswith("Подскажите, пожалуйста, какие именно? Сейчас есть: ")
+    bot.say("фисташковый и ягодный")
+    assert _items_of(bot) == [("Фисташковые синнамоны", 1), ("Ягодные синнамоны", 1)]
+    assert bot.state.pending_items == []
+
+    other = Bot(db, make_conversation(), llm)
+    assert reply_text(other.say("классические")) == "Сколько коробочек нужно: Классические синнамоны?"
+    other.say("две коробки")
+    assert _items_of(other) == [("Классические синнамоны", 2)] and other.state.pending_items == []
 
 
 def test_a_stale_draft_is_abandoned_when_a_new_order_starts(

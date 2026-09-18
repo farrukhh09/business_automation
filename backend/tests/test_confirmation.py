@@ -50,6 +50,12 @@ CASES: list[tuple[str | None, ConfirmationDecision]] = [
     ("хама дуруст", YES),
     ("Тасдиқ мекунам", YES),
     ("тасдик мекунам", YES),
+    # Khujand: "рост" (right), "ҳа, боша" (yes, fine), "дуруст аст"
+    ("рост", YES),
+    ("Ха, рост", YES),
+    ("ҳамааш рост", YES),
+    ("ҳа, дуруст аст", YES),
+    ("ха боша", YES),
     # --- UNCERTAIN: doubt, weak acknowledgements, empty (03 §5, SPEC §13) ---------------
     ("", UNCERTAIN),
     ("   ", UNCERTAIN),
@@ -89,6 +95,13 @@ CASES: list[tuple[str | None, ConfirmationDecision]] = [
     ("фикр мекунам", UNCERTAIN),
     ("намедонам", UNCERTAIN),
     ("мебинем", UNCERTAIN),
+    # Khujand: "боша"/"нағз"/"майли" are an "ok", not a "yes"; "мумкин" is "maybe"
+    ("боша", UNCERTAIN),
+    ("нағз", UNCERTAIN),
+    ("майли", UNCERTAIN),
+    ("мумкин", UNCERTAIN),
+    ("ха мумкин", UNCERTAIN),
+    ("фикр мекнам ха", UNCERTAIN),
     # --- NO: refusal without anything to extract (03 §5) --------------------------------
     ("нет", NO),
     ("Нет!", NO),
@@ -113,6 +126,8 @@ CASES: list[tuple[str | None, ConfirmationDecision]] = [
     ("не, хато", NO),
     ("не дуруст", NO),
     ("бекор кунед", NO),
+    ("хато аст", NO),
+    ("ин хел не", NO),
     # --- CHANGE: agreement/refusal plus substantive details (03 §5) ---------------------
     ("да, но время 19:00", CHANGE),
     ("Да, только адрес другой", CHANGE),
@@ -130,6 +145,7 @@ CASES: list[tuple[str | None, ConfirmationDecision]] = [
     ("время 19:00", CHANGE),
     ("Фардо", CHANGE),
     ("вақт 19:00", CHANGE),
+    ("ха, пагоҳ", CHANGE),  # Khujand "tomorrow" is a detail, not a plain yes
 ]
 
 
