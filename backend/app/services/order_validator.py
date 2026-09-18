@@ -45,6 +45,7 @@ USABLE_GEOCODE_STATUSES: frozenset[GeocodeStatus] = frozenset({GeocodeStatus.OK,
 TOO_SOON = "delivery_too_soon"
 TOO_FAR = "delivery_too_far"
 DATE_PAST = "delivery_date_past"  # "5 августа" said in September: a slip, not a slot that is too soon
+OUT_OF_HOURS = "delivery_out_of_hours"  # "к 23:30" outside ``order_hours_start``–``order_hours_end``
 
 
 def _filled(value: str | None) -> bool:
@@ -118,7 +119,8 @@ class OrderValidator:
         - date in the past: reported alone (the customer slipped on the month, not on the lead time);
         - too soon: the slot is earlier than ``now + min_lead_time_hours``; when the time is not
           known yet the end of the delivery day is used, so "today" is still reported as too soon;
-        - too far: ``delivery_date`` is more than ``max_days_ahead`` days ahead.
+        - too far: ``delivery_date`` is more than ``max_days_ahead`` days ahead;
+        - out of hours: the time is outside ``order_hours_start``–``order_hours_end`` (when set).
 
         An unknown ``delivery_date`` is reported by ``missing_fields``, not here (empty list).
         """
@@ -140,10 +142,18 @@ class OrderValidator:
             return [DATE_PAST]
         problems: list[str] = []
 
-        slot_time: time = delivery_time if delivery_time is not None else time(23, 59)
+        slot_time: time = delivery_time if delivery_time is not None else (settings.order_hours_end or time(23, 59))
         slot = combine_business(delivery_date, slot_time)
         if slot < moment + timedelta(hours=settings.min_lead_time_hours):
             problems.append(TOO_SOON)
         if delivery_date > business_today() + timedelta(days=settings.max_days_ahead):
             problems.append(TOO_FAR)
+        if delivery_time is not None and not within_order_hours(delivery_time, settings):
+            problems.append(OUT_OF_HOURS)
         return problems
+
+
+def within_order_hours(value: time, settings: BusinessSettings) -> bool:
+    """``order_hours_start`` ≤ value ≤ ``order_hours_end`` (a missing bound does not limit)."""
+    start, end = settings.order_hours_start, settings.order_hours_end
+    return (start is None or value >= start) and (end is None or value <= end)

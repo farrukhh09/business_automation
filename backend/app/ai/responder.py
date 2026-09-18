@@ -12,8 +12,9 @@ fields); this module only decides *how* it is worded:
   answer or a violation falls back to the template of the same kind.
 - a greeting the model opens with when the customer did not greet in this very message is removed
   before the checks (``strip_greeting``): the prompt forbids it, yet in a live Tajik dialog the model
-  kept copying the "Ва алейкум ассалом!" of the first reply from the history (18.09.2026). What was
-  corrected is reported in ``Reply.fixes``.
+  kept copying the "Ва алейкум ассалом!" of the first reply from the history (18.09.2026). Prices are
+  brought to the templates' form (``fix_money``: "100.00 сомонӣ кор." → "100 сомонӣ / қуттӣ."). What
+  was corrected is reported in ``Reply.fixes``.
 """
 
 import logging
@@ -42,6 +43,7 @@ __all__ = [
     "ReplySource",
     "Responder",
     "fact_amounts",
+    "fix_money",
     "strip_greeting",
     "uses_template",
 ]
@@ -232,6 +234,28 @@ def strip_greeting(text: str) -> tuple[str, bool]:
     return rest[:1].upper() + rest[1:], True
 
 
+# --------------------------------------------------------------------------- money wording
+
+#: "100.00 сомонӣ" → "100 сомонӣ": FACTS carry prices as "100.00", the prompt asks for "100".
+_ZERO_CENTS_RE = re.compile(r"(\d)[.,]00(?=\s*(?:сомон[иӣ]|смн|tjs)(?![а-яёӣ]))", re.IGNORECASE)
+#: "100 сомонӣ кор." in a Tajik reply: the catalog's Russian unit copied from FACTS ("кор" is "work"
+#: in Tajik — live, 18.09.2026) → "100 сомонӣ / қуттӣ", as the template writes it.
+_TG_PRICE_UNIT_RE = re.compile(r"(сомон[иӣ])\s*(?:/\s*|за\s+)?(кор|шт)(\.?)(?![а-яёӣ])", re.IGNORECASE)
+
+
+def fix_money(text: str, language: str) -> tuple[str, bool]:
+    """Prices as the templates write them: no ".00", and Tajik units after a Tajik price."""
+    fixed = _ZERO_CENTS_RE.sub(r"\1", text)
+    if language == templates.TG:
+
+        def _unit(match: re.Match[str]) -> str:
+            unit = templates.UNITS_TG[match.group(2).lower()]
+            return f"{templates.CURRENCY[templates.TG]} / {unit}{match.group(3)}"
+
+        fixed = _TG_PRICE_UNIT_RE.sub(_unit, fixed)
+    return fixed, fixed != text
+
+
 # --------------------------------------------------------------------------- responder
 
 
@@ -264,7 +288,6 @@ class Responder:
             text, removed = strip_greeting(text)
             if removed:
                 fixes.append("greeting_removed")
-                log_event(logger, "ai.reply_fixed", kind=plan.kind.value, language=plan.language, fixes=fixes)
 
         if not text:
             return self._fallback(plan, template_text, ("empty_reply",))
@@ -272,6 +295,12 @@ class Responder:
         violations = list(self._check(plan, text))
         if violations:
             return self._fallback(plan, template_text, tuple(violations))
+        # After the checks: the Tajik unit put in here must not make a Russian reply pass the language check.
+        text, money_fixed = fix_money(text, plan.language)
+        if money_fixed:
+            fixes.append("money_format")
+        if fixes:
+            log_event(logger, "ai.reply_fixed", kind=plan.kind.value, language=plan.language, fixes=fixes)
         return Reply(text, plan.kind, plan.language, ReplySource.LLM, fixes=tuple(fixes))
 
     # ------------------------------------------------------------------ internals

@@ -24,6 +24,8 @@ logger = get_logger(__name__)
 BUSINESS_SETTINGS_KEY = "business"
 WAREHOUSE_FIELD = "warehouse"
 NULLABLE_WAREHOUSE_FIELDS = frozenset({"latitude", "longitude"})
+#: Top-level settings where an explicit ``null`` means "no value" rather than "leave unchanged".
+NULLABLE_FIELDS = frozenset({"order_hours_start", "order_hours_end"})
 
 
 def _error_fields(exc: PydanticValidationError) -> list[str]:
@@ -71,6 +73,11 @@ class SettingsService:
                 for error in exc.errors():
                     loc = error["loc"]
                     if not loc:
+                        # A model-level check (the order hours pair): drop that pair, not everything.
+                        for key in sorted(NULLABLE_FIELDS & data.keys()):
+                            data.pop(key)
+                            dropped.append(key)
+                            removed = True
                         continue
                     top = str(loc[0])
                     nested = data.get(WAREHOUSE_FIELD)
@@ -118,7 +125,11 @@ class SettingsService:
                 for key, value in changes[WAREHOUSE_FIELD].items()
                 if value is not None or key in NULLABLE_WAREHOUSE_FIELDS
             }
-        changes = {key: value for key, value in changes.items() if key != WAREHOUSE_FIELD and value is not None}
+        changes = {
+            key: value
+            for key, value in changes.items()
+            if key != WAREHOUSE_FIELD and (value is not None or key in NULLABLE_FIELDS)
+        }
 
         current, usable_stored = self._effective(self._stored())
         candidate = current.model_dump()

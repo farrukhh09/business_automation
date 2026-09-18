@@ -23,6 +23,8 @@ CONTRACT_KEYS = {
     "warehouse",
     "pickup_address",
     "working_hours",
+    "order_hours_start",
+    "order_hours_end",
     "min_lead_time_hours",
     "max_days_ahead",
     "delivery_time_window_minutes",
@@ -67,6 +69,7 @@ def test_defaults_when_nothing_stored(db: Session) -> None:
     assert settings.warehouse == Warehouse(name="Склад", address="", latitude=None, longitude=None)
     assert settings.pickup_address == ""
     assert settings.working_hours == ""
+    assert (settings.order_hours_start, settings.order_hours_end) == (None, None)
     assert settings.min_lead_time_hours == 24
     assert settings.max_days_ahead == 60
     assert settings.delivery_time_window_minutes == 60

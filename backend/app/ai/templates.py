@@ -187,6 +187,9 @@ _TEXTS: dict[str, dict[str, str]] = {
         "day_tomorrow": "завтра",
         "date_past": "{date} уже прошло 🙂",
         "too_far": "Заказы принимаем не больше чем на {days} дн. вперёд. Выберите, пожалуйста, другую дату.",
+        "out_of_hours": "Заказы выдаём с {start} до {end}. Выберите, пожалуйста, другое время.",
+        "out_of_hours_from": "Заказы выдаём не раньше {start}. Выберите, пожалуйста, другое время.",
+        "out_of_hours_until": "Заказы выдаём не позже {end}. Выберите, пожалуйста, другое время.",
         "phone_invalid": (
             "Номер телефона не получилось распознать. Напишите, пожалуйста, в формате "
             f"{PHONE_EXAMPLE_NATIONAL} или {PHONE_EXAMPLE_INTERNATIONAL}."
@@ -329,6 +332,9 @@ _TEXTS: dict[str, dict[str, str]] = {
         "earliest_date": "{date} баъд аз соати {time}",
         "date_past": "{date} аллакай гузашт 🙂",
         "too_far": "Фармоишро то {days} рӯз пештар қабул мекунем. Рӯзи дигарро интихоб кунед.",
+        "out_of_hours": "Фармоишро аз соати {start} то {end} медиҳем. Соати дигарро интихоб кунед.",
+        "out_of_hours_from": "Фармоишро на барвақттар аз соати {start} медиҳем. Соати дигарро интихоб кунед.",
+        "out_of_hours_until": "Фармоишро на дертар аз соати {end} медиҳем. Соати дигарро интихоб кунед.",
         "phone_invalid": (
             f"Рақами телефонро нафаҳмидем. Дар шакли {PHONE_EXAMPLE_NATIONAL} ё {PHONE_EXAMPLE_INTERNATIONAL} нависед."
         ),
@@ -548,6 +554,14 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
         )
     elif timing == "delivery_too_far":
         notes.append(_t(language, "too_far", days=_text(facts.get("max_days_ahead")) or "60"))
+    elif timing == "delivery_out_of_hours":
+        start, end = _text(facts.get("order_hours_start")), _text(facts.get("order_hours_end"))
+        if start and end:
+            notes.append(_t(language, "out_of_hours", start=start, end=end))
+        elif start:
+            notes.append(_t(language, "out_of_hours_from", start=start))
+        elif end:
+            notes.append(_t(language, "out_of_hours_until", end=end))
     if facts.get("phone_invalid"):
         notes.append(_t(language, "phone_invalid"))
     return notes

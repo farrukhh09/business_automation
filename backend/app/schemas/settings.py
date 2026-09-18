@@ -68,6 +68,10 @@ class BusinessSettings(BaseModel):
     warehouse: Warehouse = Field(default_factory=Warehouse)
     pickup_address: str = Field(default="", max_length=ADDRESS_MAX)
     working_hours: str = Field(default="", max_length=ADDRESS_MAX)
+    # Hours the bot takes delivery/pickup times in (03 §1.3, 18.09.2026): "к 23:30" is refused when the
+    # bakery works 9:00–20:00. ``working_hours`` above is only the text shown to customers. ``null`` = no limit.
+    order_hours_start: HHMM | None = None
+    order_hours_end: HHMM | None = None
     min_lead_time_hours: int = Field(default=24, ge=0, le=24 * 30)
     max_days_ahead: int = Field(default=60, ge=1, le=366)
     delivery_time_window_minutes: int = Field(default=60, ge=0, le=12 * 60)
@@ -84,6 +88,13 @@ class BusinessSettings(BaseModel):
     prepayment_wallet: str = Field(default="", max_length=SHORT_TEXT_MAX)
     prepayment_wallet_banks: str = Field(default="", max_length=ADDRESS_MAX)
     prepayment_auto_confirm: bool = False
+
+    @model_validator(mode="after")
+    def _validate_order_hours(self) -> Self:
+        start, end = self.order_hours_start, self.order_hours_end
+        if start is not None and end is not None and end <= start:
+            raise ValueError("Время окончания приёма заказов должно быть позже начала")
+        return self
 
 
 class WarehouseUpdate(BaseModel):
@@ -109,6 +120,8 @@ class BusinessSettingsUpdate(BaseModel):
     warehouse: WarehouseUpdate | None = None
     pickup_address: str | None = Field(default=None, max_length=ADDRESS_MAX)
     working_hours: str | None = Field(default=None, max_length=ADDRESS_MAX)
+    order_hours_start: HHMM | None = None  # explicit ``null`` removes the limit
+    order_hours_end: HHMM | None = None
     min_lead_time_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     max_days_ahead: int | None = Field(default=None, ge=1, le=366)
     delivery_time_window_minutes: int | None = Field(default=None, ge=0, le=12 * 60)

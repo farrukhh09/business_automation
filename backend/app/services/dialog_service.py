@@ -139,6 +139,7 @@ from app.services.order_validator import (
     DATE_PAST,
     DELIVERY_DATE,
     DELIVERY_TIME,
+    OUT_OF_HOURS,
     TOO_FAR,
     TOO_SOON,
     USABLE_GEOCODE_STATUSES,
@@ -182,6 +183,18 @@ ANSWERS_FACT = "answers"
 _BARE_NUMBER_RE = re.compile(
     r"^\s*(\d{1,3})\s*(?:шт\.?|штук[аи]?|дона|pcs|кор\.?|коробк[а-я]*|қуттӣ|куттӣ)?\s*[.!]?\s*$", re.IGNORECASE
 )
+
+#: Agreement to an offered time that the strict order confirmation reads as UNCERTAIN ("давайте", "ок",
+#: "майлаш"): enough to take the slot the bot itself proposed, never to confirm an order.
+_SLOT_AGREEMENTS = [
+    phrase.split()
+    for phrase in (
+        "давайте", "ну давайте", "давай", "хорошо", "ну хорошо", "ок", "окей", "ok", "ладно", "пойдет",
+        "можно", "устраивает", "подходит", "согласна", "согласен", "хоп", "хуп", "майлаш", "майли",
+        "мешад", "мешава", "шудаст", "хуб", "нагз", "ха майлаш", "хоп майлаш",
+    )
+]
+_AGREEMENT_PUNCT_RE = re.compile(r"[^\w\s]")
 
 #: Intents that ask something and must be answered, even when the message carries order data.
 QUERY_INTENTS = frozenset(
@@ -280,6 +293,7 @@ class DialogService:
                 return self._handoff(turn, REASON_IMAGE, "image", language)
         if not turn.text:
             return self._finish(turn, ReplyPlan(ReplyKind.CLARIFY, language), reset_attempts=False)
+        offered, turn.state.offered_slot = turn.state.offered_slot, None  # valid for this one answer only
         if detect_operator_request(turn.text):
             return self._handoff(turn, REASON_OPERATOR_REQUEST, "operator_request", language)
 
@@ -287,6 +301,9 @@ class DialogService:
             outcome = self._answer_to_question(turn, language)
             if outcome is not None:
                 return outcome
+        outcome = self._accept_offered_slot(turn, offered, language)
+        if outcome is not None:
+            return outcome
         outcome = self._bare_number(turn, language)
         if outcome is not None:
             return outcome
@@ -334,6 +351,7 @@ class DialogService:
             return DialogOutcome(actions=["not_current_draft"])
         turn.draft, turn.draft_loaded = order, True
         turn.state.address_candidates = []
+        turn.state.offered_slot = None  # this reply asks something else
         if turn.state.awaiting == AWAITING_ADDRESS_CHOICE:
             turn.state.awaiting = None
         return self._continue_order(turn, order, self._known_language(turn))
@@ -422,6 +440,26 @@ class DialogService:
             state.awaiting, state.cancel_order_id = None, None
             return self._finish(turn, ReplyPlan(ReplyKind.CANCEL_KEPT, language, {"order_id": order.id}))
         return self._finish(turn, ReplyPlan(ReplyKind.CANCEL_CONFIRM, language, {"order_id": order.id}))
+
+    def _accept_offered_slot(self, turn: _Turn, offered: dict[str, str] | None, language: str) -> DialogOutcome | None:
+        """ "Да" / "ха" / "давайте" to "На завтра можем не раньше 18:00" takes that slot (live, 18.09.2026:
+        the bot kept asking "к какому времени?" after the customer agreed). Decided without the model:
+        the offer is stored with the reply, and the slot is checked again before it is written."""
+        if offered is None or turn.state.awaiting != AWAITING_MISSING_FIELDS:
+            return None
+        order = self._draft(turn)
+        if order is None or order.delivery_time is not None:
+            return None
+        agrees = classify_confirmation(turn.text) == ConfirmationDecision.YES
+        if not agrees and _AGREEMENT_PUNCT_RE.sub(" ", normalize_fold(turn.text)).split() not in _SLOT_AGREEMENTS:
+            return None
+        slot_date, slot_time = date.fromisoformat(offered["date"]), time.fromisoformat(offered["time"])
+        if OrderValidator.slot_problems(slot_date, slot_time, turn.business):
+            return None
+        self._mark_processed(turn, {"offered_slot": offered})
+        turn.tools.update_order_draft(order, **{DELIVERY_DATE: slot_date, DELIVERY_TIME: slot_time})
+        turn.actions.append("offered_slot_taken")
+        return self._continue_order(turn, order, language)
 
     def _bare_number(self, turn: _Turn, language: str) -> DialogOutcome | None:
         """A bare "2" / "1 шт" answers the only open question that expects a number — no LLM needed."""
@@ -1182,9 +1220,11 @@ class DialogService:
         if problems:
             self._note_timing(turn, problems[0], candidate_date)
             day_is_possible = not OrderValidator.slot_problems(candidate_date, None, turn.business)
-            keeps_date = problems == [TOO_SOON] and new_time is not None and day_is_possible
+            hour_problems = {TOO_SOON, OUT_OF_HOURS}
+            keeps_date = set(problems) <= hour_problems and new_time is not None and day_is_possible
             if keeps_date:
-                # "18 сентября к 16:00" when 17:00 is the earliest: the day stays, only the hour is asked again.
+                # "18 сентября к 16:00" when 17:00 is the earliest, "завтра в 23:30" when the bakery closes
+                # at 20:00: the day stays, only the hour is asked again.
                 turn.notes["timing_keeps_date"] = True
                 if new_date is not None:
                     changes[DELIVERY_DATE] = new_date
@@ -1263,7 +1303,13 @@ class DialogService:
         if problem_date is not None:
             turn.notes["problem_date"] = problem_date.isoformat()
         if problem == TOO_SOON:
-            turn.notes.update(_earliest_slot(turn.business.min_lead_time_hours))
+            earliest = _earliest_slot(turn.business)
+            turn.notes.update(earliest)
+            turn.state.offered_slot = {"date": earliest["earliest_date"], "time": earliest["earliest_time"]}
+        if problem == OUT_OF_HOURS:
+            start, end = turn.business.order_hours_start, turn.business.order_hours_end
+            turn.notes["order_hours_start"] = start.strftime("%H:%M") if start is not None else None
+            turn.notes["order_hours_end"] = end.strftime("%H:%M") if end is not None else None
 
     # ------------------------------------------------------------------ address and map pin (03 §7)
 
@@ -1813,11 +1859,18 @@ def _approximate_place(delivery: Delivery) -> str | None:
     return None
 
 
-def _earliest_slot(min_lead_time_hours: int) -> dict[str, Any]:
-    """The first slot the bakery can take (business time, rounded up to the hour) — for "самое раннее"."""
-    moment = business_now() + timedelta(hours=max(0, int(min_lead_time_hours)))
+def _earliest_slot(business: BusinessSettings) -> dict[str, Any]:
+    """The first slot the bakery can take (business time, rounded up to the hour, inside the order
+    hours) — for "самое раннее"."""
+    moment = business_now() + timedelta(hours=max(0, int(business.min_lead_time_hours)))
     if moment.minute or moment.second or moment.microsecond:
         moment = moment.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    start, end = business.order_hours_start, business.order_hours_end
+    opening = start or time(0, 0)
+    if end is not None and moment.time() > end:
+        moment = (moment + timedelta(days=1)).replace(hour=opening.hour, minute=opening.minute)
+    elif start is not None and moment.time() < start:
+        moment = moment.replace(hour=start.hour, minute=start.minute)
     today = business_today()
     relative = "today" if moment.date() == today else "tomorrow" if moment.date() == today + timedelta(days=1) else None
     return {

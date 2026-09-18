@@ -11,6 +11,7 @@ order changed afterwards — by the customer, the map pin or staff — needs a n
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -85,6 +86,21 @@ def _candidates(value: Any) -> list[dict[str, Any]]:
     return result[:MAX_ADDRESS_CANDIDATES]
 
 
+_SLOT_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_SLOT_TIME_RE = re.compile(r"^\d{2}:\d{2}$")
+
+
+def _slot(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    slot_date, slot_time = value.get("date"), value.get("time")
+    if not (isinstance(slot_date, str) and _SLOT_DATE_RE.match(slot_date)):
+        return None
+    if not (isinstance(slot_time, str) and _SLOT_TIME_RE.match(slot_time)):
+        return None
+    return {"date": slot_date, "time": slot_time}
+
+
 @dataclass(slots=True)
 class DialogState:
     draft_order_id: int | None = None
@@ -97,6 +113,9 @@ class DialogState:
     language: str | None = None
     last_intent: str | None = None
     blocked_notice_sent: bool = False
+    #: "Самое раннее — завтра после 18:00" offered in the last reply: ``{"date": ISO, "time": "HH:MM"}``.
+    #: A "Да" to that reply takes the slot; any other message forgets it.
+    offered_slot: dict[str, str] | None = None
 
     @classmethod
     def from_json(cls, data: Any) -> "DialogState":
@@ -115,6 +134,7 @@ class DialogState:
             language=language if language in ("ru", "tg") else None,
             last_intent=data.get("last_intent") if isinstance(data.get("last_intent"), str) else None,
             blocked_notice_sent=bool(data.get("blocked_notice_sent")),
+            offered_slot=_slot(data.get("offered_slot")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -129,6 +149,7 @@ class DialogState:
             "language": self.language,
             "last_intent": self.last_intent,
             "blocked_notice_sent": self.blocked_notice_sent,
+            "offered_slot": dict(self.offered_slot) if self.offered_slot else None,
         }
 
     def pending_of(self, kind: str) -> list[dict[str, Any]]:
@@ -150,6 +171,7 @@ class DialogState:
         self.summary_hash = None
         self.pending_items = []
         self.address_candidates = []
+        self.offered_slot = None
         if self.awaiting != AWAITING_CANCEL_CONFIRMATION:
             self.awaiting = None
 

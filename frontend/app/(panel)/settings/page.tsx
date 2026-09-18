@@ -24,6 +24,8 @@ interface FormState {
   warehouse_longitude: number | null;
   pickup_address: string;
   working_hours: string;
+  order_hours_start: string;
+  order_hours_end: string;
   min_lead_time_hours: string;
   max_days_ahead: string;
   delivery_time_window_minutes: string;
@@ -51,6 +53,8 @@ function toFormState(settings: BusinessSettings): FormState {
     warehouse_longitude: settings.warehouse.longitude,
     pickup_address: settings.pickup_address,
     working_hours: settings.working_hours,
+    order_hours_start: settings.order_hours_start ?? "",
+    order_hours_end: settings.order_hours_end ?? "",
     min_lead_time_hours: String(settings.min_lead_time_hours),
     max_days_ahead: String(settings.max_days_ahead),
     delivery_time_window_minutes: String(settings.delivery_time_window_minutes),
@@ -81,6 +85,9 @@ function toUpdateBody(form: FormState): BusinessSettingsUpdate {
     },
     pickup_address: form.pickup_address.trim(),
     working_hours: form.working_hours.trim(),
+    // An empty field is sent as null: the limit is removed (04 §12).
+    order_hours_start: form.order_hours_start || null,
+    order_hours_end: form.order_hours_end || null,
     min_lead_time_hours: Number(form.min_lead_time_hours),
     max_days_ahead: Number(form.max_days_ahead),
     delivery_time_window_minutes: Number(form.delivery_time_window_minutes),
@@ -167,6 +174,9 @@ export default function SettingsPage() {
     const percent = Number(form.prepayment_percent);
     if (!form.prepayment_percent || Number.isNaN(percent) || percent < 1 || percent > 100) {
       nextErrors.prepayment_percent = "Доля предоплаты: число от 1 до 100";
+    }
+    if (form.order_hours_start && form.order_hours_end && form.order_hours_end <= form.order_hours_start) {
+      nextErrors.order_hours_end = "Окончание приёма заказов должно быть позже начала";
     }
     if (form.prepayment_enabled && !form.prepayment_wallet.trim()) {
       nextErrors.prepayment_wallet = "Укажите номер кошелька или карты, иначе бот не сможет попросить предоплату";
@@ -297,7 +307,22 @@ export default function SettingsPage() {
               onChange={(event) => update("working_hours", event.target.value)}
               disabled={disabled}
               containerClassName="sm:col-span-2"
-              hint='Например: "09:00–19:00 без выходных"'
+              hint='Например: "09:00–19:00 без выходных". Этот текст бот показывает клиентам'
+            />
+            <TimeInput
+              label="Выдача заказов с"
+              value={form.order_hours_start}
+              onValueChange={(value) => update("order_hours_start", value)}
+              disabled={disabled}
+              hint="Раньше этого времени бот заказ не примет. Пусто — без ограничения"
+            />
+            <TimeInput
+              label="Выдача заказов до"
+              value={form.order_hours_end}
+              onValueChange={(value) => update("order_hours_end", value)}
+              disabled={disabled}
+              error={errors.order_hours_end}
+              hint="Позже этого времени бот заказ не примет. Пусто — без ограничения"
             />
             <Input
               label="Минимальный срок предзаказа, ч"

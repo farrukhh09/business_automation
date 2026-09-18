@@ -1056,6 +1056,9 @@ export interface BusinessSettings {
   warehouse: WarehouseSettings;
   pickup_address: string;
   working_hours: string;
+  /** "HH:MM" or null — the bot takes delivery/pickup times only inside these hours; null = no limit. */
+  order_hours_start: ISOTime | null;
+  order_hours_end: ISOTime | null;
   min_lead_time_hours: number;
   max_days_ahead: number;
   delivery_time_window_minutes: number;
