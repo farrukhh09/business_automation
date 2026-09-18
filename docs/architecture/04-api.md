@@ -188,7 +188,7 @@
 
 `BusinessSettings = {business_name: "Домашняя выпечка", ai_enabled: true, voice_replies_enabled: false, warehouse: {name, address, latitude, longitude}, pickup_address: string, working_hours: string, min_lead_time_hours: 24, max_days_ahead: 60, delivery_time_window_minutes: 60, route_start_time: "09:00", service_time_minutes: 5, average_speed_kmh: 25, daily_report_time: "21:00", payment_methods_text: string, delivery_info_text: string, prepayment_enabled: false, prepayment_percent: 100, prepayment_wallet: string, prepayment_wallet_banks: string, prepayment_auto_confirm: false}`
 
-Предоплата (03 §3, 17.09.2026): `prepayment_wallet` — номер кошелька (телефон), который бот называет после «Да» и в ответе об оплате; `prepayment_wallet_banks` — где он принимается («Душанбе Сити, Алиф, Эсхата»); `prepayment_percent` — доля суммы заказа (1..100); `prepayment_auto_confirm` — отмечать оплату по совпавшему чеку без сотрудника (по умолчанию `false`).
+Предоплата (03 §3, 17.09.2026): `prepayment_wallet` — номер счёта, который бот называет после «Да» и в ответе об оплате: кошелёк-телефон или номер карты (13 цифр и больше — карта, и бот говорит «на карту»); `prepayment_wallet_banks` — где он принимается («Душанбе Сити, Алиф, Эсхата» или банк карты; пусто — бот не уточняет); `prepayment_percent` — доля суммы заказа (1..100); `prepayment_auto_confirm` — отмечать оплату по совпавшему чеку без сотрудника (по умолчанию `false`).
 
 ## 13. Публичные и служебные маршруты
 

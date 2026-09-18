@@ -169,7 +169,7 @@ export default function SettingsPage() {
       nextErrors.prepayment_percent = "Доля предоплаты: число от 1 до 100";
     }
     if (form.prepayment_enabled && !form.prepayment_wallet.trim()) {
-      nextErrors.prepayment_wallet = "Укажите номер кошелька, иначе бот не сможет попросить предоплату";
+      nextErrors.prepayment_wallet = "Укажите номер кошелька или карты, иначе бот не сможет попросить предоплату";
     }
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
@@ -393,7 +393,7 @@ export default function SettingsPage() {
 
         <SectionCard
           title="Предоплата"
-          description="После подтверждения заказа бот просит перевести предоплату на кошелёк и прислать чек; чек бот читает сам и сверяет сумму и номер кошелька"
+          description="После подтверждения заказа бот просит перевести предоплату на кошелёк или карту и прислать чек; чек бот читает сам и сверяет сумму и получателя"
         >
           <div className="flex flex-col gap-4">
             <Switch
@@ -405,19 +405,19 @@ export default function SettingsPage() {
             />
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Input
-                label="Номер кошелька"
+                label="Номер кошелька или карты"
                 value={form.prepayment_wallet}
                 onChange={(event) => update("prepayment_wallet", event.target.value)}
                 disabled={disabled}
                 error={errors.prepayment_wallet}
-                hint="Например: +992 92 757 53 33"
+                hint="Например: +992 92 757 53 33 или 5058 2703 8115 6297 — бот сам скажет «кошелёк» или «карта»"
               />
               <Input
                 label="Где принимается"
                 value={form.prepayment_wallet_banks}
                 onChange={(event) => update("prepayment_wallet_banks", event.target.value)}
                 disabled={disabled}
-                hint='Например: "Душанбе Сити, Алиф, Эсхата"'
+                hint='Например: "Душанбе Сити, Алиф, Эсхата" или банк карты; пусто — бот не уточняет'
               />
               <Input
                 label="Доля предоплаты, %"
@@ -437,7 +437,7 @@ export default function SettingsPage() {
               onCheckedChange={(value) => update("prepayment_auto_confirm", value)}
               disabled={disabled}
               label="Отмечать оплату по чеку автоматически"
-              description="Выключено (рекомендуется): бот читает чек и пишет клиенту результат, а оплату в заказе подтверждает сотрудник после сверки в приложении банка. Включено: если сумма и кошелёк на чеке совпали, заказ сразу помечается оплаченным — скриншот можно подделать."
+              description="Выключено (рекомендуется): бот читает чек и пишет клиенту результат, а оплату в заказе подтверждает сотрудник после сверки в приложении банка. Включено: если сумма и получатель на чеке совпали, заказ сразу помечается оплаченным — скриншот можно подделать."
             />
           </div>
         </SectionCard>

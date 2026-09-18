@@ -149,10 +149,11 @@ BUSINESS_SETTINGS: dict[str, Any] = {
     "business_name": "Синнамоны",
     "pickup_address": "Худжанд, улица Ленина, 45 (тестовый адрес)",
     "working_hours": "Ежедневно с 9:00 до 20:00",
-    # The wallet number and the prepayment switch are set by the owner in «Настройки → Предоплата».
+    # The account number (a wallet or a card) and the prepayment switch are set by the owner in
+    # «Настройки → Предоплата»; the bot names the number itself, so this text stays general.
     "payment_methods_text": (
-        "Предоплата переводом на кошелёк (Душанбе Сити, Алиф, Эсхата). Наличными при получении — только по "
-        "договорённости с менеджером."
+        "Предоплата переводом на кошелёк или карту — номер бот присылает после подтверждения заказа. "
+        "Наличными при получении — только по договорённости с менеджером."
     ),
     "delivery_info_text": "Доставка по Худжанду — от 20 до 40 сомони в зависимости от района. Самовывоз бесплатный.",
     "warehouse": {

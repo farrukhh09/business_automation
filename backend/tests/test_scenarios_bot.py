@@ -1124,6 +1124,7 @@ def test_recipient_is_defaulted_on_every_path_to_the_summary(
 # --------------------------------------------------------------------------- prepayment and receipts (03 §3)
 
 WALLET = "+992 92 757 53 33"
+CARD = "5058 2703 8115 6297"  # the owner may put a card number in the settings instead of a wallet
 BANKS = "Душанбе Сити, Алиф, Эсхата"
 PREPAYMENT_REQUEST = (
     f"Предоплата — 750 сомони: переведите, пожалуйста, на кошелёк {WALLET} ({BANKS}) и пришлите сюда чек — "
@@ -1181,6 +1182,29 @@ def test_confirmation_asks_for_the_prepayment(
 
 
 @pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_the_account_may_be_a_card_number(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    """03 §3: a card instead of a wallet phone — the texts say "карту" and the receipt still matches."""
+    SettingsService(db).update({"prepayment_wallet": CARD, "prepayment_wallet_banks": ""})
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750, recipient=CARD)
+    bot, order, confirmed = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    assert reply_text(confirmed).endswith(
+        f"Предоплата — 750 сомони: переведите, пожалуйста, на карту {CARD} и пришлите сюда чек — "
+        "скриншот перевода. Как только менеджер увидит оплату, заказ пойдёт в работу."
+    )
+
+    outcome = _send_image(bot, media)
+
+    assert outcome.reply.kind == ReplyKind.RECEIPT_RESULT and not outcome.handoff
+    assert reply_text(outcome).startswith("Чек получили, спасибо! Перевод 750 сомони.")
+    comments = [event.comment for event in order.events if event.comment]
+    assert comments[-1].startswith("Чек из Instagram: 750.00 сомони, Alif, получатель совпадает")
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
 def test_a_receipt_is_read_checked_and_left_to_the_operator(
     db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
 ) -> None:
@@ -1205,7 +1229,7 @@ def test_a_receipt_is_read_checked_and_left_to_the_operator(
     db.refresh(bot.conversation)
     assert bot.conversation.needs_attention and bot.conversation.mode == ConversationMode.AI
     comments = [event.comment for event in order.events if event.comment]
-    assert comments[-1].startswith("Чек из Instagram: 750.00 сомони, Alif, кошелёк совпадает")
+    assert comments[-1].startswith("Чек из Instagram: 750.00 сомони, Alif, получатель совпадает")
     message = db.scalars(select(Message).where(Message.message_type == MessageType.IMAGE)).one()
     assert message.ai_processed and message.ai_payload["receipt"]["ok"] is True
 
@@ -1221,8 +1245,8 @@ def test_a_receipt_is_read_checked_and_left_to_the_operator(
         ),
         (
             {"amount": 750, "recipient": "+992 93 111 22 33"},
-            f"На чеке получатель +992 93 111 22 33, а наш кошелёк — {WALLET}. Проверьте, пожалуйста, перевод; "
-            "если деньги ушли не туда, напишите нам — менеджер поможет.",
+            f"На чеке получатель +992 93 111 22 33, а перевод нужен на кошелёк {WALLET}. Проверьте, пожалуйста, "
+            "перевод; если деньги ушли не туда, напишите нам — менеджер поможет.",
         ),
         (
             {"amount": 750, "status": "failed"},

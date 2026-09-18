@@ -8,6 +8,7 @@ from app.ai.receipt import (
     ReceiptReading,
     check_receipt,
     expected_prepayment,
+    is_card_number,
     mentions_payment_done,
     parse_reading,
     receipt_json_schema,
@@ -17,6 +18,7 @@ from app.ai.receipt import (
 from tests.bot_fakes import receipt_reading
 
 WALLET = "+992 92 757 53 33"
+CARD = "5058 2703 8115 6297"
 EXPECTED = Decimal("300.00")
 
 
@@ -44,6 +46,29 @@ def test_wallet_matches(recipient: str | None, expected: bool | None) -> None:
 
 def test_wallet_matches_needs_a_configured_wallet() -> None:
     assert wallet_matches("927575333", "") is None
+
+
+@pytest.mark.parametrize(
+    ("recipient", "expected"),
+    [
+        ("5058 2703 8115 6297", True),
+        ("5058270381156297", True),
+        ("5058 27** **** 6297", True),  # the app masks the middle digits
+        ("**** 6297", True),  # only the last four are printed
+        ("5058 2703 8115 1234", False),  # another card
+        ("+992 92 757 53 33", False),  # a wallet, not our card
+        ("Фаррух М.", None),
+    ],
+)
+def test_wallet_matches_when_the_account_is_a_card(recipient: str, expected: bool | None) -> None:
+    """The owner may put a card number in the settings; then a long recipient is compared, not rejected."""
+    assert wallet_matches(recipient, CARD) is expected
+
+
+def test_is_card_number() -> None:
+    assert is_card_number(CARD) and is_card_number("5058270381156297")
+    assert not is_card_number(WALLET) and not is_card_number("992927575333")
+    assert not is_card_number("") and not is_card_number(None)
 
 
 def test_expected_prepayment() -> None:
@@ -114,12 +139,12 @@ def test_receipt_note_for_the_operator() -> None:
     reading = parse_reading(receipt_reading())
     note = receipt_note(reading, check_receipt(reading, EXPECTED, WALLET), auto_paid=False)
     assert note == (
-        "Чек из Instagram: 300.00 сомони, Alif, кошелёк совпадает, 17.09.2026 12:31. "
+        "Чек из Instagram: 300.00 сомони, Alif, получатель совпадает, 17.09.2026 12:31. "
         "Сверьте поступление в приложении банка и отметьте оплату."
     )
     short = parse_reading(receipt_reading(amount=250, recipient="+992 93 111 22 33"))
     note = receipt_note(short, check_receipt(short, EXPECTED, WALLET), auto_paid=False)
-    assert "кошелёк НЕ совпадает: +992 93 111 22 33" in note and "не хватает 50.00 сомони" in note
+    assert "получатель НЕ совпадает: +992 93 111 22 33" in note and "не хватает 50.00 сомони" in note
     auto = receipt_note(reading, check_receipt(reading, EXPECTED, WALLET), auto_paid=True)
     assert auto.endswith("Оплата отмечена автоматически — сверьте поступление в приложении банка.")
 

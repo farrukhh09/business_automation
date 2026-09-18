@@ -30,6 +30,7 @@ __all__ = [
     "ReceiptVerdict",
     "check_receipt",
     "expected_prepayment",
+    "is_card_number",
     "mentions_payment_done",
     "read_receipt",
     "receipt_json_schema",
@@ -39,9 +40,9 @@ __all__ = [
 
 #: Below this the picture is treated as "not a receipt" (a cake photo, a chat screenshot).
 MIN_CONFIDENCE = 0.5
-#: Fewer visible digits in the recipient cannot identify a wallet ("**** 33").
+#: Fewer visible digits in the recipient cannot identify an account ("**** 33").
 MIN_VISIBLE_DIGITS = 4
-#: This many digits is a card or an account, never the wallet's phone number.
+#: This many digits is a card or a bank account; a phone wallet is at most 12 ("+992 92 757 53 33").
 CARD_DIGITS = 13
 MAX_TEXT_CHARS = 120
 
@@ -232,12 +233,23 @@ def read_receipt(llm: LLMClient, image: bytes, media_type: str) -> ReceiptReadin
 # --------------------------------------------------------------------------- the decision
 
 
-def wallet_matches(recipient: str | None, wallet: str) -> bool | None:
-    """Compare the recipient printed on the receipt with the bakery's wallet number.
+def is_card_number(account: str | None) -> bool:
+    """True when the bakery's own account is a card / bank account rather than a wallet phone number.
 
-    Masked digits are wildcards ("+992 92 *** 53 33", "92 *** 53 33" both fit +992 92 757 53 33), a
-    national number is compared with the tail of the wallet. ``None`` when nothing comparable is
-    printed (a name only, fewer than four digits); ``False`` for another number or a card / account.
+    The owner types the number in the settings; 13 digits or more is a card ("5058 2703 8115 6297"),
+    fewer is a phone ("+992 92 757 53 33"). The customer-facing texts pick the right word from this,
+    and ``wallet_matches`` compares a long recipient number instead of rejecting it.
+    """
+    return len(re.sub(r"\D", "", account or "")) >= CARD_DIGITS
+
+
+def wallet_matches(recipient: str | None, wallet: str) -> bool | None:
+    """Compare the recipient printed on the receipt with the bakery's own account number.
+
+    Masked digits are wildcards ("+992 92 *** 53 33", "92 *** 53 33" both fit +992 92 757 53 33;
+    "**** 6297" fits a card ending in 6297), a national number is compared with the tail of ours.
+    ``None`` when nothing comparable is printed (a name only, fewer than four digits); ``False`` for
+    another number — including a card or an account when our own number is a phone wallet.
     """
     wallet_digits = re.sub(r"\D", "", wallet or "")
     if not wallet_digits or not recipient:
@@ -246,7 +258,7 @@ def wallet_matches(recipient: str | None, wallet: str) -> bool | None:
     visible = sum(char.isdigit() for char in pattern)
     if visible < MIN_VISIBLE_DIGITS:
         return None
-    if visible >= CARD_DIGITS:
+    if visible >= CARD_DIGITS and not is_card_number(wallet):
         return False
     if len(pattern) > len(wallet_digits):
         pattern = pattern[-len(wallet_digits) :]
@@ -303,9 +315,9 @@ def receipt_note(reading: ReceiptReading, verdict: ReceiptVerdict, *, auto_paid:
     if reading.provider:
         parts.append(reading.provider)
     if verdict.wallet_ok is True:
-        parts.append("кошелёк совпадает")
+        parts.append("получатель совпадает")
     elif verdict.wallet_ok is False:
-        parts.append(f"кошелёк НЕ совпадает: {reading.recipient}")
+        parts.append(f"получатель НЕ совпадает: {reading.recipient}")
     else:
         parts.append("получатель не виден")
     if reading.paid_at:
