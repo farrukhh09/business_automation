@@ -8,6 +8,7 @@ from app.models.expense import Expense
 from app.models.faq import FaqItem
 from app.models.order import Order, OrderEvent, OrderItem, Payment
 from app.models.product import Product
+from app.models.receipt import PaymentReceipt
 from app.models.report import DailyReport
 from app.models.settings import AppSetting
 from app.models.user import RefreshToken, User
@@ -28,6 +29,7 @@ __all__ = [
     "OrderEvent",
     "OrderItem",
     "Payment",
+    "PaymentReceipt",
     "Product",
     "RefreshToken",
     "RoutePlan",

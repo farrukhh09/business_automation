@@ -37,6 +37,7 @@ from app.models.enums import (
 from app.models.faq import FaqItem
 from app.models.order import Order
 from app.models.product import Product
+from app.repositories.receipts import ReceiptRepository
 from app.services.dialog_service import (
     ABANDON_REASON,
     AUTO_PAYMENT_NOTE,
@@ -57,6 +58,7 @@ from tests.bot_fakes import (
     ambiguous,
     future_day,
     item,
+    receipt_inspection,
     receipt_reading,
     single_house,
     understanding,
@@ -1155,8 +1157,9 @@ def _confirmed_order(db: Session, catalog: dict[str, Product], make_conversation
     return bot, order, confirmed
 
 
-def _send_image(bot: Bot, media: MediaStorage):
-    filename = media.save(b"\xff\xd8receipt", prefix="in", extension="jpg")
+def _send_image(bot: Bot, media: MediaStorage, content: bytes = b"\xff\xd8receipt"):
+    """The picture as stored by the inbound service; the same ``content`` is the same file (a reused receipt)."""
+    filename = media.save(content, prefix="in", extension="jpg")
     return bot.say(None, message_type=MessageType.IMAGE, media_url=MediaStorage.url_path(filename))
 
 
@@ -1343,9 +1346,115 @@ def test_auto_confirm_marks_the_order_paid_from_a_matching_receipt(
     # a receipt that does not fit never marks anything, even with auto-confirm on
     llm.receipt = receipt_reading(amount=500)
     bot2, order2, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
-    _send_image(bot2, media)
+    _send_image(bot2, media, content=b"\xff\xd8another-receipt")
     db.refresh(order2)
     assert order2.payment_status == PaymentStatus.UNPAID
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_a_receipt_used_for_another_order_is_not_accepted(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    """03 §3: one screenshot for two orders — the customer is told plainly, the operator is warned."""
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750)
+    first_bot, first_order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    assert reply_text(_send_image(first_bot, media)).startswith("Чек получили, спасибо!")
+
+    second_bot, second_order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    outcome = _send_image(second_bot, media)
+
+    assert outcome.reply.kind == ReplyKind.RECEIPT_RESULT and not outcome.handoff
+    assert reply_text(outcome) == (
+        "Этот чек уже присылали к другому заказу. Если это новый перевод, пришлите, пожалуйста, чек именно "
+        "по нему — менеджер проверит."
+    )
+    comments = [event.comment for event in second_order.events if event.comment]
+    assert f"ВНИМАНИЕ: этот чек уже присылали к заказу №{first_order.id} (тот же файл)" in comments[-1]
+
+    # another screenshot of the same transfer: caught by the transaction number
+    llm.receipt = receipt_reading(amount=750, reference="AF-2026-0918-884512")
+    third_bot, third_order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    assert reply_text(_send_image(third_bot, media, content=b"\xff\xd8full")).startswith("Чек получили")
+    fourth_bot, fourth_order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    _send_image(fourth_bot, media, content=b"\xff\xd8cropped")
+    comments = [event.comment for event in fourth_order.events if event.comment]
+    assert f"к заказу №{third_order.id} (тот же номер операции)" in comments[-1]
+    db.refresh(fourth_order)
+    assert fourth_order.payment_status == PaymentStatus.UNPAID
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_a_second_receipt_tops_up_the_first_and_a_resent_one_is_recognised(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=500, reference="TX-000001")
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    assert "ещё 250 сомони" in reply_text(_send_image(bot, media, content=b"\xff\xd8part-one"))
+
+    # the customer sends the same screenshot again: recognised, not counted twice
+    again = _send_image(bot, media, content=b"\xff\xd8part-one")
+    assert reply_text(again) == (
+        f"Этот чек мы уже получили, спасибо! Менеджер сверит поступление и подтвердит оплату по заказу №{order.id}."
+    )
+
+    # "переведите ещё 250": the new 250 receipt is enough now
+    llm.receipt = receipt_reading(amount=250, reference="TX-000002")
+    topped = _send_image(bot, media, content=b"\xff\xd8part-two")
+    assert reply_text(topped).startswith("Чек получили, спасибо! Перевод 250 сомони.")
+    receipts = ReceiptRepository(db).for_order(order.id)
+    assert [receipt.problems for receipt in receipts] == [["amount_short"], ["resent"], []]
+    assert [receipt.reference for receipt in receipts] == ["TX000001", "TX000001", "TX000002"]
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_a_doubtful_receipt_is_never_marked_paid_and_the_customer_is_not_accused(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    SettingsService(db).update({"prepayment_auto_confirm": True})
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750)
+    llm.inspection = receipt_inspection(where="750,00 TJS")  # the amount drawn unlike the other lines
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    outcome = _send_image(bot, media)
+
+    assert reply_text(outcome) == (
+        "Чек получили, спасибо! Перевод 750 сомони. Менеджер сверит поступление и подтвердит оплату — "
+        f"заказ №{order.id} пойдёт в работу."
+    )
+    assert len(llm.receipt_calls) == 1 and len(llm.inspection_calls) == 1
+    db.refresh(order)
+    assert order.payment_status == PaymentStatus.UNPAID and order.payments == []
+    comments = [event.comment for event in order.events if event.comment]
+    assert "ВНИМАНИЕ: на изображении видны признаки правки (строка «750,00 TJS»" in comments[-1]
+    [receipt] = ReceiptRepository(db).for_order(order.id)
+    assert receipt.ok is False and receipt.problems == ["looks_edited"]
+
+
+@pytest.mark.usefixtures("pickup_settings", "prepayment")
+def test_a_failed_inspection_does_not_stop_the_receipt(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage
+) -> None:
+    llm = _pickup_llm(catalog["honey"])
+    llm.receipt = receipt_reading(amount=750)
+    llm.inspection = LLMUnavailableError(reason="timeout")
+    bot, order, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+
+    outcome = _send_image(bot, media)
+
+    assert outcome.reply.kind == ReplyKind.RECEIPT_RESULT and not outcome.handoff
+    assert reply_text(outcome).startswith("Чек получили, спасибо!")
+    message = db.scalars(select(Message).where(Message.message_type == MessageType.IMAGE)).one()
+    assert "inspection" not in message.ai_payload["receipt"]
+
+    # a picture that is not a receipt is not inspected at all
+    llm.receipt = receipt_reading(is_receipt=False, amount=None)
+    calls = len(llm.inspection_calls)
+    other_bot, _, _ = _confirmed_order(db, catalog, make_conversation, llm=llm, media=media)
+    assert _send_image(other_bot, media, content=b"\xff\xd8cake").handoff
+    assert len(llm.inspection_calls) == calls
 
 
 @pytest.mark.usefixtures("pickup_settings", "prepayment")

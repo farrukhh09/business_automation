@@ -69,6 +69,7 @@ TABLES_IN_CREATION_ORDER = (
     "order_items",
     "order_events",
     "payments",
+    "payment_receipts",
     "deliveries",
     "location_requests",
     "route_plans",
@@ -416,6 +417,49 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_payments")),
     )
     op.create_index(op.f("ix_payments_order_id"), "payments", ["order_id"], unique=False)
+
+    op.create_table(
+        "payment_receipts",
+        sa.Column("id", sa.Integer(), nullable=False),
+        sa.Column("order_id", sa.Integer(), nullable=False),
+        sa.Column("customer_id", sa.Integer(), nullable=False),
+        sa.Column("message_id", sa.Integer(), nullable=False),
+        sa.Column("file_sha256", sa.String(length=64), nullable=False),
+        sa.Column("reference", sa.String(length=64), nullable=True),
+        sa.Column("fingerprint", sa.String(length=64), nullable=True),
+        sa.Column("amount", _money(), nullable=True),
+        sa.Column("currency", sa.String(length=16), nullable=True),
+        sa.Column("recipient", sa.String(length=64), nullable=True),
+        sa.Column("sender", sa.String(length=64), nullable=True),
+        sa.Column("provider", sa.String(length=64), nullable=True),
+        sa.Column("paid_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("status", sa.String(length=16), nullable=False),
+        sa.Column("ok", sa.Boolean(), nullable=False),
+        sa.Column("problems", sa.JSON(), nullable=False),
+        _created_at(),
+        sa.ForeignKeyConstraint(
+            ["customer_id"],
+            ["customers.id"],
+            name=op.f("fk_payment_receipts_customer_id_customers"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["message_id"],
+            ["messages.id"],
+            name=op.f("fk_payment_receipts_message_id_messages"),
+            ondelete="CASCADE",
+        ),
+        sa.ForeignKeyConstraint(
+            ["order_id"], ["orders.id"], name=op.f("fk_payment_receipts_order_id_orders"), ondelete="CASCADE"
+        ),
+        sa.PrimaryKeyConstraint("id", name=op.f("pk_payment_receipts")),
+        sa.UniqueConstraint("message_id", name=op.f("uq_payment_receipts_message_id")),
+    )
+    op.create_index(op.f("ix_payment_receipts_order_id"), "payment_receipts", ["order_id"], unique=False)
+    op.create_index(op.f("ix_payment_receipts_customer_id"), "payment_receipts", ["customer_id"], unique=False)
+    op.create_index(op.f("ix_payment_receipts_file_sha256"), "payment_receipts", ["file_sha256"], unique=False)
+    op.create_index(op.f("ix_payment_receipts_reference"), "payment_receipts", ["reference"], unique=False)
+    op.create_index(op.f("ix_payment_receipts_fingerprint"), "payment_receipts", ["fingerprint"], unique=False)
 
     op.create_table(
         "deliveries",

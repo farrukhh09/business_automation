@@ -228,6 +228,14 @@ _TEXTS: dict[str, dict[str, str]] = {
             "заказ №{order_id} пойдёт в работу."
         ),
         "receipt_auto_paid": "Спасибо, оплату {amount} получили ✅ Заказ №{order_id} в работе.",
+        "receipt_resent": (
+            "Этот чек мы уже получили, спасибо! Менеджер сверит поступление и подтвердит оплату по заказу "
+            "№{order_id}."
+        ),
+        "receipt_duplicate": (
+            "Этот чек уже присылали к другому заказу. Если это новый перевод, пришлите, пожалуйста, чек именно "
+            "по нему — менеджер проверит."
+        ),
         "receipt_short": (
             "Чек получили: {amount}, а предоплата по заказу №{order_id} — {expected}. Переведите, пожалуйста, "
             "ещё {shortfall} на {account_to} {wallet} и пришлите чек."
@@ -365,6 +373,14 @@ _TEXTS: dict[str, dict[str, str]] = {
             "мекунад — фармоиши №{order_id} ба кор меравад."
         ),
         "receipt_auto_paid": "Ташаккур, пардохти {amount} гирифта шуд ✅ Фармоиши №{order_id} дар кор аст.",
+        "receipt_resent": (
+            "Ин чекро мо аллакай гирифтем, ташаккур! Менеҷер расидани маблағро месанҷад ва пардохти фармоиши "
+            "№{order_id}-ро тасдиқ мекунад."
+        ),
+        "receipt_duplicate": (
+            "Ин чек аллакай барои фармоиши дигар фиристода шуда буд. Агар ин интиқоли нав бошад, лутфан, чеки "
+            "худи ҳамонро фиристед — менеҷер месанҷад."
+        ),
         "receipt_short": (
             "Чекро гирифтем: {amount}, аммо пешпардохти фармоиши №{order_id} — {expected}. Лутфан, боз {shortfall} "
             "ба {account_to} {wallet} интиқол диҳед ва чекро фиристед."
@@ -900,12 +916,20 @@ def _ask_receipt(facts: Mapping[str, Any], missing_fields: Sequence[str], langua
 
 
 def _receipt_result(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
-    """What the bot read on the receipt (03 §3): one message per outcome, the worst problem first."""
+    """What the bot read on the receipt (03 §3): one message per outcome, the worst problem first.
+
+    Only ``problems`` reach the customer; operator-only alerts (a doubtful date, traces of editing)
+    leave the neutral "менеджер сверит" text — the facts never carry them.
+    """
     problems = [str(problem) for problem in facts.get("problems") or []]
     if "status" in problems:
         key = "receipt_failed"
     elif "currency" in problems:
         key = "receipt_currency"
+    elif "duplicate" in problems:
+        key = "receipt_duplicate"
+    elif "resent" in problems:
+        key = "receipt_resent"
     elif "wallet_mismatch" in problems:
         key = "receipt_wallet_mismatch"
     elif "amount_unknown" in problems:

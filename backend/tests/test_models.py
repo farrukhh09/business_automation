@@ -27,6 +27,7 @@ from app.models import (
     OrderEvent,
     OrderItem,
     Payment,
+    PaymentReceipt,
     Product,
     RefreshToken,
     RoutePlan,
@@ -61,6 +62,7 @@ EXPECTED_TABLES = {
     "order_items",
     "order_events",
     "payments",
+    "payment_receipts",
     "deliveries",
     "location_requests",
     "route_plans",
@@ -82,6 +84,7 @@ ALL_MODELS = (
     OrderItem,
     OrderEvent,
     Payment,
+    PaymentReceipt,
     Delivery,
     LocationRequest,
     RoutePlan,
@@ -109,7 +112,14 @@ def test_metadata_contains_every_table() -> None:
 
 
 def test_timestamp_columns_follow_contract() -> None:
-    without_updated_at = {"refresh_tokens", "order_events", "payments", "location_requests", "messages"}
+    without_updated_at = {
+        "refresh_tokens",
+        "order_events",
+        "payments",
+        "payment_receipts",
+        "location_requests",
+        "messages",
+    }
     for name, table in Base.metadata.tables.items():
         assert "created_at" in table.c, name
         assert ("updated_at" in table.c) is (name not in without_updated_at), name
@@ -166,6 +176,16 @@ def test_create_every_model_with_defaults(db: Session, admin_user: User) -> None
     )
 
     db.add_all([order, location_request, plan, message, faq, setting, report, refresh, expense])
+    db.flush()
+    db.add(
+        PaymentReceipt(
+            order_id=order.id,
+            customer_id=customer.id,
+            message_id=message.id,
+            file_sha256="0" * 64,
+            status="success",
+        )
+    )
     db.commit()
     db.expire_all()
 
@@ -178,6 +198,10 @@ def test_create_every_model_with_defaults(db: Session, admin_user: User) -> None
     assert saved_customer.customer_type == "NEW"
     assert saved_customer.last_order_at is None
     assert [c.id for c in saved_customer.conversations] == [conversation.id]
+
+    saved_receipt = db.scalars(sa.select(PaymentReceipt)).one()
+    assert saved_receipt.ok is False and saved_receipt.problems == [] and saved_receipt.reference is None
+    assert _is_utc(saved_receipt.created_at)
 
     saved_product = db.scalars(sa.select(Product)).one()
     assert (saved_product.currency, saved_product.unit) == ("TJS", "шт.")

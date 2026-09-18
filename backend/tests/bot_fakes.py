@@ -82,14 +82,18 @@ class ScriptedLLM:
         default: dict[str, Any] | Exception | None = None,
         reply: str | Callable[[dict[str, Any]], str] | Exception | None = None,
         receipt: dict[str, Any] | Exception | None = None,
+        inspection: dict[str, Any] | Exception | None = None,
     ) -> None:
         self.script = dict(script or {})
         self.default = default
         self.reply = reply
         self.receipt = receipt  # what the model "reads" on an image (app/ai/receipt.py)
+        # how the image looks (``inspect_receipt``): clean unless a test says otherwise
+        self.inspection = inspection if inspection is not None else receipt_inspection()
         self.json_calls: list[dict[str, Any]] = []
         self.text_calls: list[dict[str, Any]] = []
         self.receipt_calls: list[list[dict[str, Any]]] = []
+        self.inspection_calls: list[list[dict[str, Any]]] = []
 
     def complete_json(
         self,
@@ -101,6 +105,11 @@ class ScriptedLLM:
         tool_executor: Any = None,
         max_tool_rounds: int = 3,
     ) -> dict[str, Any]:
+        if _has_image(messages) and "mismatch" in schema.get("properties", {}):
+            self.inspection_calls.append(messages)
+            if isinstance(self.inspection, Exception):
+                raise self.inspection
+            return json.loads(json.dumps(self.inspection))
         if _has_image(messages):
             self.receipt_calls.append(messages)
             if self.receipt is None:
@@ -142,6 +151,15 @@ class ScriptedLLM:
 def _has_image(messages: list[dict[str, Any]]) -> bool:
     content = messages[-1].get("content") if messages else None
     return isinstance(content, list) and any(block.get("type") == "image" for block in content)
+
+
+def receipt_inspection(where: str | None = None) -> dict[str, Any]:
+    """A model answer for ``inspect_receipt``: clean, or one line ``where`` drawn unlike the others."""
+    return {
+        "lines": ["Перевод выполнен: sans-serif", "300,00 TJS: sans-serif"],
+        "mismatch": where is not None,
+        "where": where,
+    }
 
 
 def receipt_reading(**overrides: Any) -> dict[str, Any]:

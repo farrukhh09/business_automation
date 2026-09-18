@@ -109,6 +109,25 @@ id PK; order_id FK→orders (cascade) IX; actor_type ActorType; actor_user_id FK
 ## payments — `Payment`
 id PK; order_id FK→orders (cascade) IX; kind PaymentKind; amount Numeric(12,2) (>0); method PaymentMethod?; note text?; created_by_user_id FK→users?; paid_at datetime; created_at. (без updated_at)
 
+## payment_receipts — `PaymentReceipt` (чеки об оплате, прочитанные ботом; добавлено 18.09.2026)
+Одна строка на скриншот, который бот распознал как чек перевода (03 §3). Нужна, чтобы узнать повторно присланный чек — тот же файл, тот же номер операции или тот же перевод — и чтобы доплата по второму чеку засчитывалась.
+| колонка | тип | примечание |
+|---|---|---|
+| id | int PK | |
+| order_id | FK→orders (cascade) IX | заказ, к которому бот отнёс чек |
+| customer_id | FK→customers (cascade) IX | кто прислал |
+| message_id | FK→messages (cascade) U | входящее сообщение с картинкой |
+| file_sha256 | str(64) IX | SHA-256 файла: тот же скриншот второй раз |
+| reference | str(64)? IX | номер операции без пробелов и дефисов, верхний регистр (`normalize_reference`, от 6 символов) |
+| fingerprint | str(64)? IX | SHA-256 от «сумма + минута + отправитель» (`transfer_fingerprint`): тот же перевод на другом скриншоте; только если все три прочитаны |
+| amount | money? | сумма с чека |
+| currency, recipient, sender, provider | str? | как прочитала модель (обрезаны до 16/64) |
+| paid_at | datetime? | время перевода (UTC), только если на чеке есть и дата, и время |
+| status | str(16) | `success` / `failed` / `pending` / `unknown` |
+| ok | bool | чек подошёл без проблем и тревог |
+| problems | JSON list | коды проблем и тревог (`amount_short`, `duplicate`, `resent`, `looks_edited`, `date_future`, …) |
+| created_at | datetime | (без updated_at) |
+
 ## deliveries — `Delivery` (структурированный адрес и доставка, 1:1 с заказом типа DELIVERY)
 | колонка | тип | примечание |
 |---|---|---|

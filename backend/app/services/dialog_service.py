@@ -49,7 +49,24 @@ from app.ai.handoff import detect_operator_request
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
 from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention
-from app.ai.receipt import check_receipt, expected_prepayment, mentions_payment_done, read_receipt, receipt_note
+from app.ai.receipt import (
+    MIN_CONFIDENCE,
+    EarlierReceipt,
+    ReceiptInspection,
+    ReceiptReading,
+    ReceiptVerdict,
+    check_receipt,
+    credited_amount,
+    expected_prepayment,
+    file_digest,
+    inspect_receipt,
+    mentions_payment_done,
+    normalize_reference,
+    paid_at_bounds,
+    read_receipt,
+    receipt_note,
+    transfer_fingerprint,
+)
 from app.ai.responder import Reply, ReplyKind, ReplyPlan, Responder, uses_template
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.ai.templates import MAX_QUESTIONS, render
@@ -91,10 +108,12 @@ from app.models.enums import (
 from app.models.faq import FaqItem
 from app.models.order import Order
 from app.models.product import Product
+from app.models.receipt import PaymentReceipt
 from app.repositories.conversations import MessageRepository
 from app.repositories.faq import FaqRepository
 from app.repositories.orders import OrderRepository
 from app.repositories.products import ProductRepository
+from app.repositories.receipts import ReceiptRepository
 from app.schemas.settings import BusinessSettings
 from app.services.constants import DRAFT_ORDER_STATUSES, IN_PROGRESS_ORDER_STATUSES, is_inside_tajikistan
 from app.services.customer_service import CustomerService
@@ -222,6 +241,7 @@ class DialogService:
         self.orders = OrderRepository(db)
         self.faq = FaqRepository(db)
         self.messages = MessageRepository(db)
+        self.receipts = ReceiptRepository(db)
         self.order_service = OrderService(db)
         self.customer_service = CustomerService(db)
 
@@ -701,8 +721,10 @@ class DialogService:
 
         ``None`` means "not our case" (policy off, no such order, no stored file, not a receipt): the
         picture goes to the operator exactly as before. The model only reads the screenshot; the
-        amount, the wallet and the status are compared here, and the order is marked paid only when
-        the owner switched ``prepayment_auto_confirm`` on — otherwise the operator confirms.
+        amount, the recipient, the status, a reused receipt and a doubtful date or look are judged
+        here (``check_receipt``), and the order is marked paid only when the owner switched
+        ``prepayment_auto_confirm`` on and nothing raised a doubt — otherwise the operator confirms.
+        Every recognised receipt is stored (``payment_receipts``), so the next one can be compared.
         """
         order = self._awaiting_payment(turn)
         if order is None or turn.message is None:
@@ -724,11 +746,27 @@ class DialogService:
             )
             return self._handoff(turn, REASON_RECEIPT_UNREAD, "receipt_unread", language)
         business = turn.business
-        expected = expected_prepayment(order.total_amount, order.paid_amount, business.prepayment_percent)
-        verdict = check_receipt(reading, expected, business.prepayment_wallet)
-        self._mark_processed(turn, {"receipt": {"reading": reading.model_dump(mode="json"), **verdict.as_dict()}})
+        stored = self.receipts.for_order(order.id)
+        credited = credited_amount(order.paid_amount, ((receipt.amount, receipt.problems) for receipt in stored))
+        expected = expected_prepayment(order.total_amount, credited, business.prepayment_percent)
+        digest = file_digest(data)
+        recognised = reading.is_receipt and reading.confidence >= MIN_CONFIDENCE
+        inspection = self._inspect_receipt(turn, llm, data, media_type) if recognised else None
+        verdict = check_receipt(
+            reading,
+            expected,
+            business.prepayment_wallet,
+            earlier=self._earlier_receipt(order, reading, digest) if recognised else None,
+            inspection=inspection,
+            ordered_at=order.created_at,
+        )
+        payload: dict[str, Any] = {"reading": reading.model_dump(mode="json"), **verdict.as_dict()}
+        if inspection is not None:
+            payload["inspection"] = inspection.model_dump(mode="json")
+        self._mark_processed(turn, {"receipt": payload})
         if "not_receipt" in verdict.problems:
             return None
+        self._store_receipt(turn, order, reading, verdict, digest)
         auto_paid = False
         if verdict.ok and business.prepayment_auto_confirm and verdict.amount is not None:
             self.order_service.payments.register_payment(
@@ -756,6 +794,63 @@ class DialogService:
             **(self._prepayment(turn) or {}),
         }
         return self._finish(turn, ReplyPlan(ReplyKind.RECEIPT_RESULT, language, facts))
+
+    def _inspect_receipt(
+        self, turn: _Turn, llm: LLMClient, data: bytes, media_type: str
+    ) -> ReceiptInspection | None:
+        """The look of the screenshot (05 §9): only a hint, so a failed call just leaves it out."""
+        try:
+            return inspect_receipt(llm, data, media_type)
+        except LLMError as exc:
+            log_event(
+                logger,
+                "dialog.receipt_inspection_failed",
+                level=logging.WARNING,
+                conversation_id=turn.conversation.id,
+                reason=exc.reason,
+            )
+            return None
+
+    def _earlier_receipt(self, order: Order, reading: ReceiptReading, digest: str) -> EarlierReceipt | None:
+        """A stored receipt this one repeats: the same file, transaction number or transfer."""
+        reference = normalize_reference(reading.reference)
+        found = self.receipts.find_earlier(
+            file_sha256=digest, reference=reference, fingerprint=transfer_fingerprint(reading)
+        )
+        if found is None:
+            return None
+        if found.file_sha256 == digest:
+            match = "file"
+        elif reference is not None and found.reference == reference:
+            match = "reference"
+        else:
+            match = "transfer"
+        return EarlierReceipt(order_id=found.order_id, same_order=found.order_id == order.id, match=match)
+
+    def _store_receipt(
+        self, turn: _Turn, order: Order, reading: ReceiptReading, verdict: ReceiptVerdict, digest: str
+    ) -> None:
+        assert turn.message is not None  # _receipt runs for an incoming image only
+        bounds = paid_at_bounds(reading.paid_at_iso)
+        self.receipts.add(
+            PaymentReceipt(
+                order_id=order.id,
+                customer_id=turn.customer.id,
+                message_id=turn.message.id,
+                file_sha256=digest,
+                reference=normalize_reference(reading.reference),
+                fingerprint=transfer_fingerprint(reading),
+                amount=reading.amount,
+                currency=_clip(reading.currency, 16),
+                recipient=_clip(reading.recipient, 64),
+                sender=_clip(reading.sender, 64),
+                provider=_clip(reading.provider, 64),
+                paid_at=bounds[0] if bounds is not None and bounds[2] else None,
+                status=reading.status,
+                ok=verdict.ok,
+                problems=verdict.codes,
+            )
+        )
 
     def _ask_receipt(self, turn: _Turn, language: str) -> DialogOutcome | None:
         """ "Оплатил" / "перевёл" while a prepayment is awaited: the receipt is asked for, no model needed."""
@@ -1577,6 +1672,11 @@ def _has_order_fields(entities: Entities) -> bool:
         entities.payment_method,
     )
     return any(value is not None for value in values)
+
+
+def _clip(value: str | None, length: int) -> str | None:
+    """What the model read, cut to the column (PostgreSQL enforces ``String(n)``)."""
+    return value[:length] if value else None
 
 
 def _brings_items(entities: Entities) -> bool:

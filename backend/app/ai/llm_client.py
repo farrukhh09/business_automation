@@ -59,6 +59,7 @@ TOOL_RESULT_CHARS = 8_000
 STAGE_UNDERSTANDING = "understanding"
 STAGE_REPLY = "reply"
 STAGE_RECEIPT = "receipt"  # a payment receipt screenshot read into JSON (app/ai/receipt.py)
+STAGE_RECEIPT_INSPECTION = "receipt_inspection"  # the same screenshot looked at for traces of editing
 
 # Prompt/message types: plain dicts, exactly as they are sent to the API.
 Block = dict[str, Any]
@@ -511,6 +512,7 @@ __all__ = [
     "FALLBACKS_MODE",
     "JSON_MAX_TOKENS",
     "STAGE_RECEIPT",
+    "STAGE_RECEIPT_INSPECTION",
     "STAGE_REPLY",
     "STAGE_UNDERSTANDING",
     "TEXT_MAX_TOKENS",
