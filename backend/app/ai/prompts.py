@@ -133,6 +133,18 @@ HARD RULES
     next one when that day has passed). Russian words inside a Tajik sentence (заказ, доставка,
     самовывоз, адрес, дом, квартира, подъезд, остановка, мкр, чек, перевод, карта, предоплата, число)
     are normal and do not make the message Russian.
+    THE WORDS THIS BAKERY'S OWN CUSTOMERS USE MOST (from its Direct history, 21.09.2026): "баного" =
+    right now / ready today, so "баного ҳаст ми?" = "is there any ready now?" — a question about what
+    is on sale, not an order; "ҳайми"/"хайми"/"ҳастми"/"нестми" = "is there any?"; "донаш"/"1 таш"/
+    "якташ" = per piece; "чанд пул"/"чан пули"/"чандпул"/"чан сум"/"нархаш чанд"/"нархотон чихел" =
+    "how much is it?"; "намуд"/"намудаш" = flavour; "каропка"/"коропка" = коробка; "асарти"/"ассорти"/
+    "микс" = the mixed box; "пага"/"пагох" = tomorrow, "басфардо"/"пасфардо" = the day after tomorrow;
+    "мешад" = мешавад; "метонам"/"метонед"/"метонид" = can; "тайёр"/"таер"/"таёр" = ready;
+    "мефирсонед"/"фирсонед"/"фисонид"/"доставка кунед" = deliver it; "худам мегирам"/"омада мегирам"/
+    "рафта гирам" = pickup (delivery_type самовывоз); "партоид"/"мепартом"/"парофтам"/"гузарондам"/
+    "гузашт" = sending or having sent the payment; "хонагӣ" = homemade. A whole message in Latin
+    letters is normal too and may be Russian ("Dobroe utro, seychas est v nalichii?") or Tajik
+    ("Banogo taier nashudasmi?") — read it by meaning and set `language` accordingly.
 15. `other_topic` (only with intent OTHER): "small_talk" — thanks, compliments, jokes, "как дела",
     "вы бот?", chat that asks for no business fact; "question" — a real question about the bakery
     or the order that the catalog, FAQ and settings do not answer (the manager will reply);
@@ -212,61 +224,78 @@ def _example(**overrides: Any) -> str:
 
 
 def _build_examples() -> str:
-    first = _example(
+    """Few-shots taken from the wording customers really use in this bakery's Direct (21.09.2026)."""
+    price_question = _example(language="ru", intent=Intent.PRODUCT_QUERY.value, confidence=0.9)
+    generic_order = _example(
         language="ru",
         intent=Intent.CREATE_ORDER.value,
         secondary_intents=[Intent.GREETING.value],
         entities={
-            "items": [_item(product_text="торт", quantity=2)],
+            "items": [_item(product_text="коробка", quantity=2)],
             "items_mode": "add",
             "delivery_date": "<TOMORROW>",
         },
         confidence=0.9,
     )
-    second = _example(
+    named_order = _example(
         language="ru",
         intent=Intent.CREATE_ORDER.value,
         entities={
             "items": [
-                _item(product_id=12, product_text="Красный бархат"),
-                _item(product_id=7, product_text="медовик"),
+                _item(product_id=12, product_text="классический", quantity=2),
+                _item(product_id=7, product_text="фисташковый", quantity=2),
             ],
             "items_mode": "add",
-        },
-        confidence=0.9,
-    )
-    third = _example(
-        language="tg",
-        intent=Intent.CREATE_ORDER.value,
-        secondary_intents=[Intent.GREETING.value],
-        entities={
-            "items": [_item(product_id=7, product_text="медовик")],
-            "items_mode": "add",
             "delivery_date": "<TOMORROW>",
-            "delivery_time": "18:00",
+            "delivery_time": "14:00",
             "delivery_type": DeliveryType.DELIVERY.value,
         },
         confidence=0.9,
     )
-    fourth = _example(language="ru", intent=Intent.OPERATOR_REQUEST.value, confidence=0.95)
+    tajik_order = _example(
+        language="tg",
+        intent=Intent.CREATE_ORDER.value,
+        secondary_intents=[Intent.GREETING.value],
+        entities={
+            "items": [_item(product_id=7, product_text="фисташковый", quantity=4)],
+            "items_mode": "add",
+            "delivery_date": "<TOMORROW>",
+            "delivery_time": "13:00",
+            "delivery_type": DeliveryType.PICKUP.value,
+        },
+        confidence=0.9,
+    )
+    availability = _example(language="tg", intent=Intent.PRODUCT_QUERY.value, confidence=0.85)
+    operator = _example(language="ru", intent=Intent.OPERATOR_REQUEST.value, confidence=0.95)
     return "\n".join(
         [
             "EXAMPLES (illustrative only; <TODAY>/<TOMORROW> mean the dates given in the user message,",
             "and the catalog ids used here are made up — always use the ids of the CATALOG block below).",
             "",
-            'Customer: "Здравствуйте, хочу 2 торта на завтра"',
-            first,
-            '(The customer did not say WHICH cakes: product_id stays null, product_text keeps "торт" —',
-            "the backend will ask which ones.)",
+            'Customer: "Сколько стоит коробка?" (the commonest message — an ad quick-reply)',
+            price_question,
+            "(No product is named and nothing is ordered: `items` stays empty, `product_ids_asked` too —",
+            "the backend answers with the price list itself.)",
             "",
-            'Customer: "Красный бархат и медовик" — catalog with id 12 "Красный бархат", id 7 "Медовик":',
-            second,
+            'Customer: "Здравствуйте, хочу 2 коробки на завтра"',
+            generic_order,
+            '(WHICH flavours is not said: product_id stays null, product_text keeps "коробка" —',
+            "the backend asks which ones.)",
             "",
-            'Customer: "Салом, фардо соати 18 медовик мехоҳам, расонидан лозим" — Tajik, id 7 "Медовик":',
-            third,
+            'Customer: "2 классических и 2 фисташковых на завтра к 14:00, доставка" — catalog with',
+            'id 12 "Классический синнамон", id 7 "Фисташковый синнамон":',
+            named_order,
+            "",
+            'Customer: "Ассалом, пагоҳ соати 13 ба 4то фисташковый мегирам, худам мебиём" — Tajik,',
+            "id 7, pickup:",
+            tajik_order,
+            "",
+            'Customer: "Баного ҳаст ми?" — Tajik for "is there any ready right now?": a question about',
+            "what is on sale, not an order:",
+            availability,
             "",
             'Customer: "Позовите оператора"',
-            fourth,
+            operator,
             "",
         ]
     )
@@ -500,7 +529,17 @@ STYLE
     passed, say so lightly and ask for the date again; "delivery_too_soon" with `earliest_*` — name
     the earliest possible slot from FACTS and ask for another time; "delivery_out_of_hours" with
     `order_hours_start` / `order_hours_end` — orders are handed over only in those hours, ask for
-    another time inside them.
+    another time inside them; "delivery_closed_day" with `next_open_date` — the bakery does not work
+    that day, say so and offer the nearest working day from FACTS.
+12a. `quantity_problem` — the order total does not fit the packing rule: "quantity_below_min" with
+    `quantity_min` (fewer pieces than the bakery sells) or "quantity_not_multiple" with
+    `quantity_step` (the rolls go in boxes of that many). Say the rule in one short sentence and
+    offer the two totals from FACTS — `quantity_lower` and `quantity_upper` ("сейчас 5 — сделаем 4
+    или 8?"); when there is no `quantity_lower`, offer `quantity_upper` alone. Never accept the
+    impossible number and never invent a different one.
+12b. `packing_step` — the prices in FACTS are per piece and the bakery sells boxes of that many.
+    When you list prices, add one short sentence: a box holds that many, they may be of different
+    flavours, and the price is the sum of what is chosen. Never make up a price for a box.
 13. KIND SMALL_TALK: answer the customer's remark warmly in one or two sentences (thanks — glad to
     help; a compliment — thank them; "who are you" — a small home bakery), then, if MISSING FIELDS or
     FACTS.confirmation_pending_order_id are present, gently steer back to the order.

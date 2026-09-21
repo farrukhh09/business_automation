@@ -10,7 +10,7 @@ Stored as JSON under ``app_settings.key = "business"`` by ``SettingsService``.
 """
 
 from datetime import time
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -25,6 +25,12 @@ DEFAULT_ROUTE_START_TIME = time(9, 0)
 SHORT_TEXT_MAX = 128
 ADDRESS_MAX = 500
 LONG_TEXT_MAX = 4000
+
+#: ``date.weekday()``: 0 = Monday … 6 = Sunday.
+WEEKDAY = Annotated[int, Field(ge=0, le=6)]
+DAYS_IN_WEEK = 7
+#: Upper bound of the packing rule — a sanity limit, not a business one.
+MAX_QUANTITY_RULE = 1000
 
 
 def default_daily_report_time() -> time:
@@ -72,6 +78,14 @@ class BusinessSettings(BaseModel):
     # bakery works 9:00–20:00. ``working_hours`` above is only the text shown to customers. ``null`` = no limit.
     order_hours_start: HHMM | None = None
     order_hours_end: HHMM | None = None
+    # Days the bakery hands nothing over (0 = Monday … 6 = Sunday), 03 §1.3, 21.09.2026: the
+    # Instagram archive shows "завтра мы не работаем, в понедельник снова будем" every Friday.
+    closed_weekdays: list[WEEKDAY] = Field(default_factory=list)
+    # Packing (03 §1.3, 21.09.2026): the rolls go into boxes of 4 and the bakery sells "либо 4, либо 8" —
+    # the order total must be at least ``min_order_quantity`` and a multiple of ``order_quantity_step``.
+    # Both 1 = no packing rule.
+    min_order_quantity: int = Field(default=1, ge=1, le=MAX_QUANTITY_RULE)
+    order_quantity_step: int = Field(default=1, ge=1, le=MAX_QUANTITY_RULE)
     min_lead_time_hours: int = Field(default=24, ge=0, le=24 * 30)
     max_days_ahead: int = Field(default=60, ge=1, le=366)
     delivery_time_window_minutes: int = Field(default=60, ge=0, le=12 * 60)
@@ -94,6 +108,16 @@ class BusinessSettings(BaseModel):
         start, end = self.order_hours_start, self.order_hours_end
         if start is not None and end is not None and end <= start:
             raise ValueError("Время окончания приёма заказов должно быть позже начала")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_closed_weekdays(self) -> Self:
+        """De-duplicated and sorted; a week that is closed on all seven days leaves no slot to offer."""
+        unique = sorted(set(self.closed_weekdays))
+        if len(unique) >= DAYS_IN_WEEK:
+            raise ValueError("Нельзя сделать выходными все семь дней недели")
+        if unique != self.closed_weekdays:
+            object.__setattr__(self, "closed_weekdays", unique)
         return self
 
 
@@ -122,6 +146,9 @@ class BusinessSettingsUpdate(BaseModel):
     working_hours: str | None = Field(default=None, max_length=ADDRESS_MAX)
     order_hours_start: HHMM | None = None  # explicit ``null`` removes the limit
     order_hours_end: HHMM | None = None
+    closed_weekdays: list[WEEKDAY] | None = None
+    min_order_quantity: int | None = Field(default=None, ge=1, le=MAX_QUANTITY_RULE)
+    order_quantity_step: int | None = Field(default=None, ge=1, le=MAX_QUANTITY_RULE)
     min_lead_time_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     max_days_ahead: int | None = Field(default=None, ge=1, le=366)
     delivery_time_window_minutes: int | None = Field(default=None, ge=0, le=12 * 60)

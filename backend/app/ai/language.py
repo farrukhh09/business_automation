@@ -222,6 +222,67 @@ _TAJIK_STRONG = frozenset(
         "чиро",
         "руз",
         "рузи",
+        # Words taken from this bakery's own Instagram history (21.09.2026): the forms its customers
+        # type most often and the heuristic could not score before.
+        "баного",  # "ҳозир"/"в наличии": "баного хаст ми?"
+        "хайми",  # ҳаст-ми — "is there any?" ("хастми"/"нестми" are listed above)
+        "донаш",  # per piece
+        "чандпул",
+        "чанпул",
+        "нархотон",
+        "худам",  # "худам мегирам" = I will pick it up myself
+        "худатон",
+        "худашам",
+        "пага",  # tomorrow (пагоҳ)
+        "пагава",
+        "басфардо",
+        "пасфардо",
+        "кунид",
+        "кунам",
+        "шавад",
+        "шуд",
+        "мешуд",
+        "буд",
+        "рафта",
+        "омада",
+        "гирифта",
+        "када",
+        "таер",
+        "метонам",
+        "метонем",
+        "метонед",
+        "метонид",
+        "намешад",
+        "намуд",
+        "намудаш",
+        "намудхо",
+        "фирсонед",
+        "фирсонид",
+        "фисонид",
+        "мефирсонам",
+        "партоид",
+        "мепартом",
+        "парофтам",
+        "гузашт",
+        "гузаронд",
+        "гузарондам",
+        "хонаги",
+        "бамаза",
+        "макул",
+        "якбор",
+        "пулаша",
+        "пули",
+        "асалом",
+        "асалому",
+        "саломалекум",
+        "мебурорем",
+        "буроварда",
+        "мегирет",
+        "мегирид",
+        "нагзми",
+        "фахмо",
+        "фахмидос",
+        "мебахшид",
     }
 )
 
@@ -257,6 +318,17 @@ _TAJIK_WEAK = frozenset(
         "мана",
         "ку",
         "кати",  # "with" in Khujand ("шоколад кати"); weak, because "Кати" is also a Russian name
+        # Tajik-accented spellings of Russian loanwords (21.09.2026, from the bakery's history):
+        # evidence of a Tajik speaker, but too close to the Russian word to weigh more.
+        "хай",  # ҳай = ҳаст ("доставка хай")
+        "каропка",
+        "коропка",
+        "каробка",
+        "асарти",
+        "даставка",
+        "дастаравон",
+        "та",  # "2 та" = two pieces
+        "тои",
     }
 )
 
@@ -397,6 +469,24 @@ _TAJIK_LATIN = frozenset(
         "soati",
         "mekunam",
         "megiram",
+        # Latin spellings seen in this bakery's own chats (21.09.2026).
+        "asalom",
+        "asalomu",
+        "aleykum",
+        "banogo",
+        "taier",
+        "nagz",
+        "nagzmi",
+        "hastmi",
+        "nestmi",
+        "mefisonid",
+        "mefirsoned",
+        "garmakak",
+        "maylash",
+        "majlash",
+        "donash",
+        "chandpul",
+        "chanpul",
     }
 )
 _RUSSIAN_LATIN = frozenset(
@@ -419,6 +509,16 @@ _RUSSIAN_LATIN = frozenset(
         "cena",
         "nuzhen",
         "nujen",
+        # Latin spellings seen in this bakery's own chats (21.09.2026).
+        "horosho",
+        "horoso",
+        "seychas",
+        "seichas",
+        "dobroe",
+        "utro",
+        "vecher",
+        "adres",
+        "nalichii",
     }
 )
 

@@ -26,10 +26,26 @@ WAREHOUSE_FIELD = "warehouse"
 NULLABLE_WAREHOUSE_FIELDS = frozenset({"latitude", "longitude"})
 #: Top-level settings where an explicit ``null`` means "no value" rather than "leave unchanged".
 NULLABLE_FIELDS = frozenset({"order_hours_start", "order_hours_end"})
+#: Fields checked together by a model-level validator of ``BusinessSettings``. A stored value that
+#: breaks such a check has no field in its error location, so ``_effective`` drops the whole group —
+#: but only the group that is invalid on its own, never the other settings (see :func:`_group_is_valid`).
+MODEL_LEVEL_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({"order_hours_start", "order_hours_end"}),
+    frozenset({"closed_weekdays"}),
+)
 
 
 def _error_fields(exc: PydanticValidationError) -> list[str]:
     return sorted({".".join(str(part) for part in error["loc"]) or "__root__" for error in exc.errors()})
+
+
+def _group_is_valid(data: Mapping[str, Any], group: frozenset[str]) -> bool:
+    """True when these fields alone (over the defaults) pass validation."""
+    try:
+        BusinessSettings.model_validate({key: data[key] for key in group if key in data})
+    except PydanticValidationError:
+        return False
+    return True
 
 
 class SettingsService:
@@ -73,10 +89,15 @@ class SettingsService:
                 for error in exc.errors():
                     loc = error["loc"]
                     if not loc:
-                        # A model-level check (the order hours pair): drop that pair, not everything.
-                        for key in sorted(NULLABLE_FIELDS & data.keys()):
-                            data.pop(key)
-                            dropped.append(key)
+                        # A model-level check (the order hours pair, the closed weekdays): drop the
+                        # group that is invalid on its own, not everything.
+                        for group in MODEL_LEVEL_GROUPS:
+                            present = sorted(group & data.keys())
+                            if not present or _group_is_valid(data, group):
+                                continue
+                            for key in present:
+                                data.pop(key)
+                                dropped.append(key)
                             removed = True
                         continue
                     top = str(loc[0])

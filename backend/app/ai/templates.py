@@ -43,6 +43,17 @@ LANGUAGES = (RU, TG)
 CURRENCY = {RU: "сомони", TG: "сомонӣ"}
 DEFAULT_UNIT_RU = "шт."
 UNIT_TG = "дона"
+
+#: Weekday names by ``date.weekday()`` (0 = Monday). ``WEEKDAYS_ON`` is the form used after the
+#: preposition ("в субботу", "рӯзи шанбе"), ``WEEKDAYS_NAME`` the plain one ("понедельник, 22.09.2026").
+WEEKDAYS_ON: dict[str, tuple[str, ...]] = {
+    RU: ("понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"),
+    TG: ("душанбе", "сешанбе", "чоршанбе", "панҷшанбе", "ҷумъа", "шанбе", "якшанбе"),
+}
+WEEKDAYS_NAME: dict[str, tuple[str, ...]] = {
+    RU: ("понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"),
+    TG: WEEKDAYS_ON[TG],
+}
 #: Russian unit abbreviations of the catalog as said in a Tajik reply ("2 кор." → "2 қуттӣ").
 UNITS_TG = {"шт": UNIT_TG, "шт.": UNIT_TG, "кор": "қуттӣ", "кор.": "қуттӣ"}
 
@@ -190,6 +201,13 @@ _TEXTS: dict[str, dict[str, str]] = {
         "out_of_hours": "Заказы выдаём с {start} до {end}. Выберите, пожалуйста, другое время.",
         "out_of_hours_from": "Заказы выдаём не раньше {start}. Выберите, пожалуйста, другое время.",
         "out_of_hours_until": "Заказы выдаём не позже {end}. Выберите, пожалуйста, другое время.",
+        "closed_day": "В {weekday} мы не работаем.",
+        "closed_day_next": " Ближайший рабочий день — {weekday}, {date}.",
+        "quantity_min": "Минимальный заказ — {min} шт.",
+        "quantity_step": "Заказ собираем коробочками по {step} шт., поэтому общее количество кратно {step}.",
+        "quantity_choice": " Сейчас {total} — сделаем {lower} или {upper}?",
+        "quantity_choice_up": " Сделаем {upper}?",
+        "packing_note": "В коробочке {step} шт. — можно собрать из разных вкусов, цена сложится из выбранных.",
         "phone_invalid": (
             "Номер телефона не получилось распознать. Напишите, пожалуйста, в формате "
             f"{PHONE_EXAMPLE_NATIONAL} или {PHONE_EXAMPLE_INTERNATIONAL}."
@@ -335,6 +353,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "out_of_hours": "Фармоишро аз соати {start} то {end} медиҳем. Соати дигарро интихоб кунед.",
         "out_of_hours_from": "Фармоишро на барвақттар аз соати {start} медиҳем. Соати дигарро интихоб кунед.",
         "out_of_hours_until": "Фармоишро на дертар аз соати {end} медиҳем. Соати дигарро интихоб кунед.",
+        "closed_day": "Рӯзи {weekday} кор намекунем.",
+        "closed_day_next": " Рӯзи кории наздиктарин — {weekday}, {date}.",
+        "quantity_min": "Фармоиши камтарин — {min} дона.",
+        "quantity_step": "Фармоишро қуттигӣ, {step}-донагӣ ҷамъ мекунем, барои ҳамин шумора ба {step} тақсим шавад.",
+        "quantity_choice": " Ҳозир {total} шуд — {lower} ё {upper} кунем?",
+        "quantity_choice_up": " {upper} кунем?",
+        "packing_note": (
+            "Дар як қуттӣ {step} дона — аз таъмҳои гуногун ҷамъ кардан мумкин, нарх аз ҳамонҳо ҷамъ мешавад."
+        ),
         "phone_invalid": (
             f"Рақами телефонро нафаҳмидем. Дар шакли {PHONE_EXAMPLE_NATIONAL} ё {PHONE_EXAMPLE_INTERNATIONAL} нависед."
         ),
@@ -562,9 +589,49 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
             notes.append(_t(language, "out_of_hours_from", start=start))
         elif end:
             notes.append(_t(language, "out_of_hours_until", end=end))
+    elif timing == "delivery_closed_day":
+        notes.append(_closed_day(facts, language))
+    if facts.get("quantity_problem"):
+        notes.append(_quantity_note(facts, language))
     if facts.get("phone_invalid"):
         notes.append(_t(language, "phone_invalid"))
     return notes
+
+
+def _weekday(index: Any, language: str, names: dict[str, tuple[str, ...]]) -> str:
+    """Weekday name for a ``date.weekday()`` value coming from the facts; "" when it is not one."""
+    try:
+        position = int(index)
+    except (TypeError, ValueError):
+        return ""
+    row = names.get(language) or names[RU]
+    return row[position] if 0 <= position < len(row) else ""
+
+
+def _closed_day(facts: Mapping[str, Any], language: str) -> str:
+    """ "В субботу мы не работаем. Ближайший рабочий день — понедельник, 22.09.2026." """
+    day = _weekday(facts.get("closed_weekday"), language, WEEKDAYS_ON)
+    note = _t(language, "closed_day", weekday=day) if day else ""
+    following = _weekday(facts.get("next_open_weekday"), language, WEEKDAYS_NAME)
+    date_text = _date(facts.get("next_open_date"))
+    if following and date_text:
+        note += _t(language, "closed_day_next", weekday=following, date=date_text)
+    return note.strip()
+
+
+def _quantity_note(facts: Mapping[str, Any], language: str) -> str:
+    """The packing rule: the minimum or the step, plus the two totals the customer can pick."""
+    if facts.get("quantity_problem") == "quantity_below_min":
+        note = _t(language, "quantity_min", min=_text(facts.get("quantity_min")) or "1")
+    else:
+        note = _t(language, "quantity_step", step=_text(facts.get("quantity_step")) or "1")
+    lower, upper = _text(facts.get("quantity_lower")), _text(facts.get("quantity_upper"))
+    total = _text(facts.get("quantity_total"))
+    if lower and upper and total:
+        note += _t(language, "quantity_choice", total=total, lower=lower, upper=upper)
+    elif upper:
+        note += _t(language, "quantity_choice_up", upper=upper)
+    return note
 
 
 def _earliest(facts: Mapping[str, Any], language: str) -> str:
@@ -869,6 +936,11 @@ def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
         return _with_reminder(_t(language, "need_manager"), facts, missing_fields, language)
     lines = "\n".join(_product_line(product, language) for product in products)
     body = lines if facts.get("asked_specific") else f"{_t(language, 'products_intro')}\n{lines}"
+    packing = _text(facts.get("packing_step"))
+    if packing:
+        # "Сколько стоит коробка?" is the commonest question of all: prices are per piece, so the
+        # answer has to say what a box is and that its price adds up (03 §1.3).
+        body += "\n" + _t(language, "packing_note", step=packing)
     return _with_reminder(body, facts, missing_fields, language)
 
 

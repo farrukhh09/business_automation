@@ -94,6 +94,12 @@ CATEGORY_STEMS = (
     "булочк",
     "кориц",
     "короб",
+    # Packaging as the customers spell it: "1 каропка", "як куттӣ", "свободных боксов".
+    "каропк",
+    "коропк",
+    "каробк",
+    "кутти",
+    "бокс",
 )
 #: A category word also finds the products named with its synonym: "синабоны" and "булочки с корицей"
 #: are the "синнамоны" of the catalog.
@@ -105,7 +111,9 @@ CATEGORY_SYNONYMS = {
     "кориц": "синнамон",
 }
 #: A packaging word asks for the products sold in it: "2 коробки" → every product with the unit "кор.".
-PACKAGING_UNITS = {"короб": "кор"}
+#: When nothing is sold by that unit — a catalog priced per piece — the word still names no flavour,
+#: so :meth:`ProductMatcher._match_category` offers the whole catalog instead of answering "нет такого".
+PACKAGING_UNITS = dict.fromkeys(("короб", "каропк", "коропк", "каробк", "кутти", "бокс"), "кор")
 
 # Words around a category word that carry no product information ("хочу 2 торта на завтра").
 _MENTION_STOPWORDS = frozenset(
@@ -313,6 +321,10 @@ class ProductMatcher:
             for entry in self._entries
             if any(stem in entry.haystack for stem in names) or any(entry.unit.startswith(unit) for unit in units)
         ]
+        if not candidates and stems and stems <= set(PACKAGING_UNITS):
+            # Only packaging was named ("сколько стоит коробка?", "1 каропка") and nothing is priced by
+            # the box: every flavour is sold in one, so ask which — never "такого товара нет".
+            candidates = [entry.product_id for entry in self._entries]
         if not candidates:
             return MatchResult(MatchStatus.NONE)
         # One cake in the catalog is not a question worth asking.

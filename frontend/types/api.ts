@@ -1059,6 +1059,11 @@ export interface BusinessSettings {
   /** "HH:MM" or null — the bot takes delivery/pickup times only inside these hours; null = no limit. */
   order_hours_start: ISOTime | null;
   order_hours_end: ISOTime | null;
+  /** Days off, `date.weekday()`: 0 — понедельник … 6 — воскресенье. The bot offers the next working day. */
+  closed_weekdays: number[];
+  /** Packing rule over the order total: at least this many pieces, and a multiple of the step. 1 = off. */
+  min_order_quantity: number;
+  order_quantity_step: number;
   min_lead_time_hours: number;
   max_days_ahead: number;
   delivery_time_window_minutes: number;

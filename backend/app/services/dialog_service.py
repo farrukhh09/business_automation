@@ -136,6 +136,7 @@ from app.services.media_storage import MediaStorage, media_type_for
 from app.services.order_pricing import money
 from app.services.order_service import BOT_CANCELLABLE_STATUSES, OrderService
 from app.services.order_validator import (
+    CLOSED_DAY,
     DATE_PAST,
     DELIVERY_DATE,
     DELIVERY_TIME,
@@ -144,6 +145,9 @@ from app.services.order_validator import (
     TOO_SOON,
     USABLE_GEOCODE_STATUSES,
     OrderValidator,
+    allowed_quantities_around,
+    next_open_day,
+    order_quantity,
 )
 from app.services.phone import normalize_phone
 from app.services.settings_service import SettingsService
@@ -709,6 +713,9 @@ class DialogService:
             facts.update({"unknown_products": unknown, "available_products": [_product_fact(p) for p in products]})
             return self._finish(turn, ReplyPlan(ReplyKind.UNKNOWN_PRODUCT, language, facts, fields))
         facts.update({"products": [_product_fact(p) for p in (asked or products)], "asked_specific": bool(asked)})
+        if turn.business.order_quantity_step > 1:
+            # Prices are per piece while the bakery sells boxes: "сколько стоит коробка?" needs the size.
+            facts["packing_step"] = turn.business.order_quantity_step
         return self._finish(turn, ReplyPlan(ReplyKind.PRODUCT_INFO, language, facts, fields))
 
     def _order_status(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
@@ -1310,6 +1317,32 @@ class DialogService:
             start, end = turn.business.order_hours_start, turn.business.order_hours_end
             turn.notes["order_hours_start"] = start.strftime("%H:%M") if start is not None else None
             turn.notes["order_hours_end"] = end.strftime("%H:%M") if end is not None else None
+        if problem == CLOSED_DAY and problem_date is not None:
+            # "В субботу мы не работаем — ближайший рабочий день понедельник."
+            open_day = next_open_day(problem_date + timedelta(days=1), turn.business)
+            turn.notes["closed_weekday"] = problem_date.weekday()
+            turn.notes["next_open_date"] = open_day.isoformat()
+            turn.notes["next_open_weekday"] = open_day.weekday()
+
+    def _note_quantity(self, turn: _Turn, order: Order) -> None:
+        """03 §1.3: the order total must fit the packing rule ("у нас либо 4, либо 8").
+
+        Nothing is noted while the items themselves are still being clarified — one question at a time.
+        """
+        turn.notes.pop("quantity_problem", None)
+        if turn.state.pending_items:
+            return
+        problems = OrderValidator.quantity_problems(order, turn.business)
+        if not problems:
+            return
+        total = order_quantity(order)
+        lower, upper = allowed_quantities_around(total, turn.business)
+        turn.notes["quantity_problem"] = problems[0]
+        turn.notes["quantity_total"] = total
+        turn.notes["quantity_step"] = turn.business.order_quantity_step
+        turn.notes["quantity_min"] = turn.business.min_order_quantity
+        turn.notes["quantity_lower"] = lower
+        turn.notes["quantity_upper"] = upper
 
     # ------------------------------------------------------------------ address and map pin (03 §7)
 
@@ -1388,7 +1421,11 @@ class DialogService:
         missing = OrderValidator.missing_fields(order)
         item_questions = bool(state.pending_items)
         askable = self._askable_fields(turn, missing)
-        blocking_notes = any(turn.notes.get(key) for key in ("unknown_products", "timing_problem", "phone_invalid"))
+        self._note_quantity(turn, order)
+        blocking_notes = any(
+            turn.notes.get(key)
+            for key in ("unknown_products", "timing_problem", "quantity_problem", "phone_invalid")
+        )
 
         if item_questions or askable or blocking_notes:
             self._reopen(order)
@@ -1431,7 +1468,7 @@ class DialogService:
 
     def _clear_slot(self, turn: _Turn, order: Order, problem: str) -> None:
         still_bad = OrderValidator.slot_problems(order.delivery_date, None, turn.business)
-        if problem in (TOO_FAR, DATE_PAST) or (problem == TOO_SOON and still_bad):
+        if problem in (TOO_FAR, DATE_PAST, CLOSED_DAY) or (problem == TOO_SOON and still_bad):
             turn.tools.update_order_draft(order, **{DELIVERY_DATE: None, DELIVERY_TIME: None})
         else:
             turn.tools.update_order_draft(order, **{DELIVERY_TIME: None})
@@ -1451,6 +1488,9 @@ class DialogService:
         if problems:
             self._note_timing(turn, problems[0], order.delivery_date)
             self._clear_slot(turn, order, problems[0])
+            return self._continue_order(turn, order, language)
+        if OrderValidator.quantity_problems(order, turn.business):
+            # The packing rule was broken by staff or by an older draft: ask again instead of confirming.
             return self._continue_order(turn, order, language)
         try:
             turn.tools.confirm_order(order, ConfirmationDecision.YES)
@@ -1861,7 +1901,7 @@ def _approximate_place(delivery: Delivery) -> str | None:
 
 def _earliest_slot(business: BusinessSettings) -> dict[str, Any]:
     """The first slot the bakery can take (business time, rounded up to the hour, inside the order
-    hours) — for "самое раннее"."""
+    hours and never on a day off) — for "самое раннее"."""
     moment = business_now() + timedelta(hours=max(0, int(business.min_lead_time_hours)))
     if moment.minute or moment.second or moment.microsecond:
         moment = moment.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
@@ -1871,6 +1911,12 @@ def _earliest_slot(business: BusinessSettings) -> dict[str, Any]:
         moment = (moment + timedelta(days=1)).replace(hour=opening.hour, minute=opening.minute)
     elif start is not None and moment.time() < start:
         moment = moment.replace(hour=start.hour, minute=start.minute)
+    open_day = next_open_day(moment.date(), business)
+    if open_day != moment.date():
+        # The next working day starts at the opening hour, not at the hour the lead time landed on.
+        moment = (moment + timedelta(days=(open_day - moment.date()).days)).replace(
+            hour=opening.hour, minute=opening.minute
+        )
     today = business_today()
     relative = "today" if moment.date() == today else "tomorrow" if moment.date() == today + timedelta(days=1) else None
     return {

@@ -14,6 +14,9 @@ import { settingsApi } from "@/services/api";
 import { isApiError } from "@/services/http";
 import type { BusinessSettings, BusinessSettingsUpdate } from "@/types/api";
 
+/** Index = `date.weekday()` of the backend: 0 — понедельник … 6 — воскресенье. */
+const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"] as const;
+
 interface FormState {
   business_name: string;
   ai_enabled: boolean;
@@ -26,6 +29,9 @@ interface FormState {
   working_hours: string;
   order_hours_start: string;
   order_hours_end: string;
+  closed_weekdays: number[];
+  min_order_quantity: string;
+  order_quantity_step: string;
   min_lead_time_hours: string;
   max_days_ahead: string;
   delivery_time_window_minutes: string;
@@ -55,6 +61,9 @@ function toFormState(settings: BusinessSettings): FormState {
     working_hours: settings.working_hours,
     order_hours_start: settings.order_hours_start ?? "",
     order_hours_end: settings.order_hours_end ?? "",
+    closed_weekdays: [...settings.closed_weekdays],
+    min_order_quantity: String(settings.min_order_quantity),
+    order_quantity_step: String(settings.order_quantity_step),
     min_lead_time_hours: String(settings.min_lead_time_hours),
     max_days_ahead: String(settings.max_days_ahead),
     delivery_time_window_minutes: String(settings.delivery_time_window_minutes),
@@ -88,6 +97,9 @@ function toUpdateBody(form: FormState): BusinessSettingsUpdate {
     // An empty field is sent as null: the limit is removed (04 §12).
     order_hours_start: form.order_hours_start || null,
     order_hours_end: form.order_hours_end || null,
+    closed_weekdays: [...form.closed_weekdays].sort((left, right) => left - right),
+    min_order_quantity: Number(form.min_order_quantity),
+    order_quantity_step: Number(form.order_quantity_step),
     min_lead_time_hours: Number(form.min_lead_time_hours),
     max_days_ahead: Number(form.max_days_ahead),
     delivery_time_window_minutes: Number(form.delivery_time_window_minutes),
@@ -170,6 +182,13 @@ export default function SettingsPage() {
     for (const [key, label] of numericFields) {
       const value = Number(form[key]);
       if (!form[key] || Number.isNaN(value) || value < 0) nextErrors[key] = `${label}: введите число ≥ 0`;
+    }
+    for (const [key, label] of [
+      ["min_order_quantity", "Минимальный заказ"],
+      ["order_quantity_step", "Кратность заказа"],
+    ] as Array<[keyof FormState, string]>) {
+      const value = Number(form[key]);
+      if (!form[key] || !Number.isInteger(value) || value < 1) nextErrors[key] = `${label}: целое число ≥ 1`;
     }
     const percent = Number(form.prepayment_percent);
     if (!form.prepayment_percent || Number.isNaN(percent) || percent < 1 || percent > 100) {
@@ -343,6 +362,62 @@ export default function SettingsPage() {
               onChange={(event) => update("max_days_ahead", event.target.value)}
               disabled={disabled}
               error={errors.max_days_ahead}
+            />
+            <div className="sm:col-span-2">
+              <span className="mb-2 block text-sm font-medium text-slate-700">Выходные дни</span>
+              <div className="flex flex-wrap gap-2">
+                {WEEKDAYS.map((label, index) => {
+                  const active = form.closed_weekdays.includes(index);
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      disabled={disabled}
+                      aria-pressed={active}
+                      onClick={() =>
+                        update(
+                          "closed_weekdays",
+                          active
+                            ? form.closed_weekdays.filter((day) => day !== index)
+                            : [...form.closed_weekdays, index],
+                        )
+                      }
+                      className={`rounded-md border px-3 py-1.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        active
+                          ? "border-rose-300 bg-rose-50 text-rose-700"
+                          : "border-slate-300 bg-white text-slate-600 hover:bg-slate-50"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">
+                В отмеченные дни бот заказы не принимает и предлагает ближайший рабочий день
+              </p>
+            </div>
+            <Input
+              label="Минимальный заказ, шт"
+              type="number"
+              min="1"
+              step="1"
+              value={form.min_order_quantity}
+              onChange={(event) => update("min_order_quantity", event.target.value)}
+              disabled={disabled}
+              error={errors.min_order_quantity}
+              hint="Меньше этого количества бот заказ не примет. 1 — без ограничения"
+            />
+            <Input
+              label="Кратность заказа, шт"
+              type="number"
+              min="1"
+              step="1"
+              value={form.order_quantity_step}
+              onChange={(event) => update("order_quantity_step", event.target.value)}
+              disabled={disabled}
+              error={errors.order_quantity_step}
+              hint="Сколько штук в коробочке: заказ будет кратен этому числу. 1 — без ограничения"
             />
           </div>
         </SectionCard>
