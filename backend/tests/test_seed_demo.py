@@ -7,8 +7,8 @@ from app.ai.text_normalize import normalize_fold
 from app.models.faq import FaqItem
 from app.models.product import Product
 from app.schemas.faq import FaqCreate
-from scripts.faq_data import FAQ
-from scripts.seed_demo import PRODUCTS, seed_faq, seed_products
+from scripts.faq_data import FAQ, RETIRED_QUESTIONS
+from scripts.seed_demo import PRODUCTS, RETIRED_PRODUCT_NAMES, seed_faq, seed_products
 
 
 def test_faq_entries_are_valid_and_bilingual() -> None:
@@ -53,3 +53,21 @@ def test_products_are_priced_per_piece(db: Session) -> None:
     """The bakery quotes per roll and sums a box from what is inside it (seed_demo docstring)."""
     assert {product["unit"] for product in PRODUCTS} == {"шт."}
     assert all(product["price"] > 0 for product in PRODUCTS)
+
+
+def test_no_answer_offers_a_retired_product() -> None:
+    """A retired item must leave the FAQ too.
+
+    The entry «Можно ли собрать разные вкусы в одной коробочке?» went on selling the assorted box
+    «Палитра вкуса» after the catalog moved to per-roll prices, because only the question it
+    replaced was retired. The trade name in guillemets is what identifies such an item.
+    """
+    assert not {entry["question"] for entry in FAQ} & set(RETIRED_QUESTIONS)
+    trade_names = [
+        normalize_fold(name.split("«")[1].rstrip("»")) for name in RETIRED_PRODUCT_NAMES if "«" in name
+    ]
+    assert trade_names, "у снятых товаров пропали фирменные названия — тест перестал что-либо проверять"
+    for entry in FAQ:
+        answers = normalize_fold(f"{entry['answer']} {entry['answer_tg']}")
+        for trade_name in trade_names:
+            assert trade_name not in answers, f"{entry['question']}: снятый товар «{trade_name}»"

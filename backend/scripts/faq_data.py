@@ -34,8 +34,13 @@ def _faq(question: str, answer: str, question_tg: str, answer_tg: str, keywords:
 
 
 #: Entries seeded before 21.09.2026 that the archive replaced. ``seed_demo`` switches them off so the
-#: bot never answers from both sets; the rows stay in the table for the owner to see.
-RETIRED_QUESTIONS: tuple[str, ...] = ("Какие вкусы у вас есть?",)
+#: bot never answers from both sets; the rows stay in the table for the owner to see. Both of these
+#: describe the retired assorted box («Палитра вкуса»), which no longer exists: a box is now simply
+#: four rolls the customer picks, so «Можно ли собрать коробочку из разных вкусов?» answers it.
+RETIRED_QUESTIONS: tuple[str, ...] = (
+    "Какие вкусы у вас есть?",
+    "Можно ли собрать разные вкусы в одной коробочке?",
+)
 
 
 FAQ: list[dict[str, Any]] = [
