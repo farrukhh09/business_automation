@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.ai.language import detect_language
+from app.ai.language import detect_language, score_languages
 from app.ai.text_normalize import contains_tajik_letters
 from app.models.enums import Language
 
@@ -156,3 +156,33 @@ def test_russian_words_that_look_like_tajik_verbs() -> None:
     assert detect_language("торт с медовиком и менеджером", None, "tg") == "ru"
     # "мера", "Кати", "местами" are Russian words, not the Khujand "мера"/"кати" forms
     assert detect_language("это для Кати, мера обычная, местами", None, "tg") == "ru"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Written by this bakery's own customers (Instagram archive, 31.08–18.09.2026). Each one
+        # was read as Russian before the enclitics were scored by rule instead of by list.
+        "штучныям мефурушидми?",
+        "штучный намефурухтаги шудит ми?",
+        "А такси гифта метоннидми",
+        "Доставка мекунитонми?",
+        "В наличии хастми",
+        "Синнамоны в наличии тайераш хай ми?",
+        "Пагами худохохад",
+        "Хамаш партом или нет доставка пага тиями",
+        "Эсхата мешад ми",
+        "Остановкава мебурорим е доставкаям хаст",
+    ],
+)
+def test_khujand_enclitics_glued_to_the_word(text: str) -> None:
+    """The dialect glues "-ми", "-аш", "-ям", "-ба"/"-ва" on, even to a Russian noun."""
+    assert detect_language(text, None, "ru") == "tg"
+
+
+def test_russian_endings_that_look_like_the_question_clitic() -> None:
+    """"-ми" is a question only after a Tajik word — Russian instrumental plurals end the same way."""
+    assert detect_language("можно прайс всех изделий с ценами?", None, "tg") == "ru"
+    assert detect_language("могут ли они быть разными?", None, "tg") == "ru"
+    # Not one point of Tajik evidence, so such a message can never pull a dialog over.
+    assert score_languages(["ценами", "разными", "нами", "вашими", "новостями"])[0] == 0
