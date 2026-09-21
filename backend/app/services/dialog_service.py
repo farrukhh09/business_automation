@@ -173,6 +173,8 @@ AUTO_PAYMENT_NOTE = "По чеку из Instagram (отмечено ботом �
 REASON_ORDER_LOCKED = "Клиент просит изменить заказ №{order_id}, который уже оформлен"
 REASON_CANCEL_LOCKED = "Клиент просит отменить заказ №{order_id}, который уже в работе"
 CANCEL_REASON = "Отменён клиентом в Instagram"
+#: The customer said no before the order existed for them — nothing was placed, nothing is cancelled.
+DRAFT_DISCARDED_REASON = "Клиент отказался до оформления заказа"
 CANCEL_REQUEST_TEXT = "отменить заказ. Сообщение клиента: {text}"
 
 #: Structured parts of a delivery address, parsed from the customer's text (06 §2).
@@ -640,6 +642,12 @@ class DialogService:
             self._mark_processed(turn, {"small_talk": kind})
         order = self._draft(turn)
         state = turn.state
+        if kind == SmallTalk.DECLINE.value:
+            # The customer is backing out. An order they have already seen is cancelled the usual
+            # way, with a confirmation; a draft they have never seen is simply dropped, and a "не
+            # надо" with nothing open is answered politely (dialog #46, 21.09.2026).
+            turn.actions.append("small_talk:decline")
+            return self._cancel_target(turn, language, declined=True)
         if (
             kind in (SmallTalk.ACK.value, SmallTalk.DONE.value)
             and order is not None
@@ -978,16 +986,49 @@ class DialogService:
     # ------------------------------------------------------------------ cancellation
 
     def _cancel_request(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
+        return self._cancel_target(turn, language)
+
+    def _cancel_target(self, turn: _Turn, language: str, *, declined: bool = False) -> DialogOutcome:
+        """What "отмените"/"не надо" applies to: the open draft, else the last active order."""
         order = self._draft(turn) or self.orders.latest_active_for_customer(turn.customer.id)
         if order is None:
+            if declined:
+                return self._finish(turn, ReplyPlan(ReplyKind.DRAFT_DISCARDED, language))
             facts, fields = self._reminder(turn)
             facts["orders"] = []
             return self._finish(turn, ReplyPlan(ReplyKind.ORDER_STATUS_INFO, language, facts, fields))
+        if self._is_unseen_draft(turn, order):
+            return self._discard_draft(turn, order, language)
         if order.status not in BOT_CANCELLABLE_STATUSES:
             return self._order_locked(turn, order, CANCEL_REQUEST_TEXT.format(text=turn.text), language, cancel=True)
         turn.state.awaiting = AWAITING_CANCEL_CONFIRMATION
         turn.state.cancel_order_id = order.id
         return self._finish(turn, ReplyPlan(ReplyKind.CANCEL_CONFIRM, language, {"order_id": order.id}))
+
+    def _is_unseen_draft(self, turn: _Turn, order: Order) -> bool:
+        """Is this a draft the customer has never been shown as an order?
+
+        The draft is the bot's own bookkeeping: it appears as soon as a flavour is named, long
+        before anything is placed. Until the summary has been shown (``summary_hash``) and the
+        order confirmed, the customer has seen no number and agreed to nothing.
+        """
+        return (
+            order.id == turn.state.draft_order_id
+            and order.status == OrderStatus.NEW
+            and turn.state.summary_hash is None
+        )
+
+    def _discard_draft(self, turn: _Turn, order: Order, language: str) -> DialogOutcome:
+        """"Тогда не надо" before anything was placed (dialog #46, 21.09.2026).
+
+        Asking «Отменить заказ №29?» invents an order the customer never made and turns a polite
+        "no, thanks" into paperwork. The draft is dropped without a word about it, and the door is
+        left open.
+        """
+        turn.tools.cancel_order(order, ConfirmationDecision.YES, reason=DRAFT_DISCARDED_REASON)
+        turn.state.close_draft()
+        turn.actions.append("draft_discarded")
+        return self._finish(turn, ReplyPlan(ReplyKind.DRAFT_DISCARDED, language))
 
     def _cancel(self, turn: _Turn, order: Order, language: str) -> DialogOutcome:
         state = turn.state

@@ -293,6 +293,53 @@ def test_cancel_word_at_the_summary_asks_to_confirm_the_cancellation(
     assert bot.state.draft_order_id is None and bot.state.awaiting is None
 
 
+def test_declining_before_anything_is_placed_names_no_order(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Dialog #46: "тогда не надо" was answered "Отменить заказ №29?".
+
+    The draft exists from the moment a flavour is named, but the customer has seen no summary and
+    no number. Naming one invents an order they never made.
+    """
+    honey = catalog["honey"]
+    llm = ScriptedLLM(
+        {
+            "Хочу медовик": understanding(
+                intent="CREATE_ORDER", entities={"items": [item("медовик", 1, honey.id)], "items_mode": "add"}
+            ),
+            "тогда не надо": understanding(intent="CANCEL_ORDER"),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+    bot.say("Хочу медовик")
+    draft_id = bot.state.draft_order_id
+    assert draft_id is not None and bot.state.summary_hash is None
+
+    outcome = bot.say("тогда не надо")
+
+    assert outcome.reply.kind == ReplyKind.DRAFT_DISCARDED
+    assert str(draft_id) not in reply_text(outcome) and "№" not in reply_text(outcome)
+    assert bot.state.draft_order_id is None and bot.state.awaiting is None
+    db.refresh(db.get(Order, draft_id))
+    assert db.get(Order, draft_id).status == OrderStatus.CANCELLED
+
+
+def test_a_placed_order_is_still_cancelled_only_after_confirming(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], make_order
+) -> None:
+    """"Не надо" is a refusal, but an order the customer has seen is not dropped behind their back."""
+    conversation = make_conversation()
+    placed = make_order(customer=conversation.customer, status=OrderStatus.CONFIRMED)
+    bot = Bot(db, conversation, ScriptedLLM(default=understanding(intent="OTHER")))
+
+    outcome = bot.say("тогда не надо")
+
+    assert outcome.reply.kind == ReplyKind.CANCEL_CONFIRM
+    assert f"№{placed.id}" in reply_text(outcome)
+    db.refresh(placed)
+    assert placed.status == OrderStatus.CONFIRMED
+
+
 def test_cancellation_can_be_declined(
     db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], make_order
 ) -> None:

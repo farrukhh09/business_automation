@@ -59,6 +59,7 @@ class ReplyKind(StrEnum):
     ORDER_CANCELLED = "ORDER_CANCELLED"
     CANCEL_CONFIRM = "CANCEL_CONFIRM"
     CANCEL_KEPT = "CANCEL_KEPT"
+    DRAFT_DISCARDED = "DRAFT_DISCARDED"  # "тогда не надо" before anything was placed — no number to name
     FAQ_ANSWER = "FAQ_ANSWER"
     PRODUCT_INFO = "PRODUCT_INFO"
     ORDER_STATUS_INFO = "ORDER_STATUS_INFO"
@@ -85,6 +86,7 @@ TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
         ReplyKind.ORDER_CANCELLED,
         ReplyKind.CANCEL_CONFIRM,
         ReplyKind.CANCEL_KEPT,
+        ReplyKind.DRAFT_DISCARDED,
         ReplyKind.HANDOFF,
         ReplyKind.NEED_MANAGER,
         ReplyKind.ADDRESS_CLARIFY,

@@ -22,6 +22,7 @@ class SmallTalk(StrEnum):
     GOODBYE = "goodbye"
     ACK = "ack"  # "ок", "хорошо", "дальше" — the customer agrees to continue
     DONE = "done"  # "это всё", "больше ничего" — nothing more to add to the order; go on
+    DECLINE = "decline"  # "тогда не надо", "дорого, спасибо" — the customer is backing out
     NONE = "none"
 
 
@@ -213,6 +214,40 @@ _DONE = (
     "дигар лозим нест",
 )
 
+#: Backing out before anything is placed: "тогда не надо", "дорого, спасибо" (dialog #46,
+#: 21.09.2026). Only whole messages count (``detect_small_talk``), so "дорого, а скидки есть?" is a
+#: question, not a refusal. "Подумаю" is deliberately absent — that is a maybe, not a no.
+_DECLINE = (
+    "не надо",
+    "тогда не надо",
+    "уже не надо",
+    "не нужно",
+    "тогда не нужно",
+    "не буду",
+    "не хочу",
+    "передумал",
+    "передумала",
+    "откажусь",
+    "отказываюсь",
+    "дорого",
+    "дороговато",
+    "в другой раз",
+    "как нибудь потом",
+    "потом напишу",
+    "нет не надо",
+    "даркор не",
+    "даркор нест",
+    "лозим не",
+    "лозим нест",
+    "намегирам",
+    "намехохам",
+    "намехоҳам",
+    "дигар вакт",
+    "дигар вақт",
+    "кимат",
+    "қимат",
+)
+
 _GREETING_CATEGORY = "greeting:"
 
 _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
@@ -221,6 +256,7 @@ _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
         ("thanks", _THANKS),
         ("goodbye", _GOODBYE),
         ("done", _DONE),
+        ("decline", _DECLINE),
         *((f"{_GREETING_CATEGORY}{greeting.value}", phrases) for greeting, phrases in _GREETINGS.items()),
     ]
 )
@@ -247,6 +283,8 @@ def detect_small_talk(text: str | None) -> SmallTalk:
     # Only the words outside the matched phrases may be fillers: "ба" inside "рӯз ба хайр" does not excuse "нарх".
     if any(token not in _FILLER for token in (Counter(tokens) - matched).elements()):
         return SmallTalk.NONE  # there is more in the message than small talk
+    if "decline" in found:
+        return SmallTalk.DECLINE  # before "thanks": "дорого, спасибо" is a refusal, not gratitude
     if "done" in found:
         return SmallTalk.DONE
     if "thanks" in found:
