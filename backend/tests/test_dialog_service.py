@@ -102,6 +102,20 @@ def incoming(db: Session, conversation: Conversation, text: str | None, **fields
     return message
 
 
+def outgoing(db: Session, conversation: Conversation, text: str) -> Message:
+    """What ``MessagingService`` stores after every reply; the dialog reads it back as history."""
+    message = Message(
+        conversation_id=conversation.id,
+        direction=MessageDirection.OUTGOING,
+        message_type=MessageType.TEXT,
+        sender=MessageSender.AI,
+        text=text,
+    )
+    db.add(message)
+    db.commit()
+    return message
+
+
 class Bot:
     """One conversation driven message by message."""
 
@@ -709,6 +723,73 @@ def test_faq_is_answered_whatever_intent_the_model_chose(
     assert bot.conversation.failed_ai_attempts == 0
     assert reply_text(bot.say("Здравствуйте, выпечка свежая?")) == "Здравствуйте! Печём в день выдачи."
     assert reply_text(bot.say("Эклер свежие?")) == "Эклер — 50 сомони / шт."
+
+
+def test_asking_which_flavours_is_answered_from_the_catalog(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Dialog #42: "какие у вас есть в наличии?" asks what the flavours are, not about today.
+
+    The pre-order entry carries "в наличии" among its keywords, which is right for "синнамоны в
+    наличии?" and wrong here — the customer wants the list, and got the same paragraph twice.
+    """
+    preorder = FaqItem(
+        question="Можно ли заказать на сегодня?",
+        answer="У нас всё с предзаказом — обычно за день.",
+        keywords=["в наличии", "есть в наличии", "на сегодня"],
+    )
+    db.add(preorder)
+    db.commit()
+    llm = ScriptedLLM(default=understanding(intent="PRODUCT_QUERY"))
+    bot = Bot(db, make_conversation(), llm)
+
+    assert "Медовик" in reply_text(bot.say("Какие у вас есть в наличии?"))
+    # the same words without the question keep the pre-order answer
+    assert reply_text(bot.say("Синнамоны в наличии?")) == "У нас всё с предзаказом — обычно за день."
+
+
+def test_wanting_to_order_does_not_swallow_the_question(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Dialog #42: "хочу заказать … какие у вас есть?" was answered "что именно хотите заказать?".
+
+    Wanting to order is the preamble; the question is the message. Naming an item does start the
+    order, and then the missing quantity is asked for as usual.
+    """
+    llm = ScriptedLLM(
+        {
+            "Здравствуйте, хочу заказать, какие у вас есть?": understanding(
+                intent="PRODUCT_QUERY", secondary_intents=["GREETING", "CREATE_ORDER"]
+            ),
+            "Хочу заказать медовик": understanding(
+                intent="CREATE_ORDER",
+                entities={"items": [item("медовик", None, catalog["honey"].id)], "items_mode": "add"},
+            ),
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    assert "Медовик" in reply_text(bot.say("Здравствуйте, хочу заказать, какие у вас есть?"))
+    assert "Сколько штук нужно" in reply_text(bot.say("Хочу заказать медовик"))
+
+
+def test_the_bot_hands_over_instead_of_repeating_itself(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    """Dialog #42: the customer rephrased and got the same paragraph back word for word."""
+    faq = FaqItem(question="Режим работы?", answer="Работаем с 9 до 20.", keywords=["работаете"])
+    db.add(faq)
+    db.commit()
+    llm = ScriptedLLM(default=understanding(intent="FAQ", faq_ids=[faq.id]))
+    bot = Bot(db, make_conversation(), llm)
+
+    first = bot.say("Вы работаете сегодня?")
+    assert reply_text(first) == "Работаем с 9 до 20."
+    outgoing(db, bot.conversation, reply_text(first))
+    outcome = bot.say("Ну а во сколько вы работаете?")
+
+    assert outcome.handoff and "handoff" in outcome.actions
+    assert reply_text(outcome) != "Работаем с 9 до 20."
 
 
 def test_order_message_asking_the_price_gets_prices_and_the_total(

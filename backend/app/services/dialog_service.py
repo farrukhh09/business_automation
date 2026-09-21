@@ -166,6 +166,7 @@ REASON_OPERATOR_REQUEST = "Клиент попросил менеджера"
 REASON_COMPLAINT = "Жалоба клиента"
 REASON_AI_UNAVAILABLE = "AI-ассистент недоступен"
 REASON_NOT_UNDERSTOOD = "Бот не смог понять клиента"
+REASON_REPEATED_REPLY = "Бот ответил бы теми же словами второй раз подряд — клиент спрашивает о другом"
 REASON_IMAGE = "Клиент прислал изображение"
 REASON_RECEIPT_UNREAD = "Клиент прислал чек об оплате, распознать его не удалось"
 AUTO_PAYMENT_NOTE = "По чеку из Instagram (отмечено ботом автоматически)"
@@ -199,6 +200,17 @@ _SLOT_AGREEMENTS = [
     )
 ]
 _AGREEMENT_PUNCT_RE = re.compile(r"[^\w\s]")
+
+#: "Какие…?" — the customer wants the list, and the catalog is the only thing that can give it.
+WHICH_WORDS = frozenset(
+    {"какие", "каких", "какой", "какая", "чего", "кадом", "кадомаш", "кадомхо", "чихел", "намуд", "намудаш"}
+)
+#: Keywords that ask "есть ли это сейчас" on their own, but name the assortment as soon as a
+#: "какие…" question is built around them: «какие у вас есть в наличии?» is about the flavours, not
+#: about today (dialog #42, 21.09.2026). An FAQ entry matched only by these loses to the catalog.
+STOCK_KEYWORDS = frozenset(
+    {"в наличии", "есть в наличии", "готовые есть", "есть сейчас", "сейчас есть", "баного", "хаст ми", "хастми"}
+)
 
 #: Intents that ask something and must be answered, even when the message carries order data.
 QUERY_INTENTS = frozenset(
@@ -585,9 +597,14 @@ class DialogService:
         return self._not_understood(turn, language)
 
     def _is_order_message(self, turn: _Turn, result: UnderstandingResult) -> bool:
-        if result.intent in ORDER_INTENTS or ORDER_INTENTS & set(result.secondary_intents):
+        if result.intent in ORDER_INTENTS:
             return True
         entities = result.entities
+        if ORDER_INTENTS & set(result.secondary_intents):
+            # "Хочу заказать синнамоны, какие у вас есть в наличии?" (dialog #42, 21.09.2026): the
+            # intent to order is the preamble and the question is the message, so the question is
+            # answered. A named item or any order data means the order has actually started.
+            return result.intent not in QUERY_INTENTS or bool(entities.items) or _has_order_fields(entities)
         if result.intent in QUERY_INTENTS or result.intent == Intent.CANCEL_ORDER:
             # "доставка мешава ми? 19-мкр, дом 5, подъезд 2" while the draft is open (live, 18.09.2026):
             # the address is order data, the question is answered on the way (``_note_answers``). A bare
@@ -670,13 +687,19 @@ class DialogService:
         OTHER (the dialog would count a failed attempt). Model-chosen ids count for GREETING too
         ("Здравствуйте, вы работаете в воскресенье?"); the admin's keywords only for PRODUCT_QUERY
         without a named product and OTHER. FAQ / delivery / payment intents keep their own handlers.
+
+        The keywords must not take a question away from the catalog: "какие у вас есть в наличии?"
+        asks what the flavours are, not whether there is any left today (dialog #42, 21.09.2026).
         """
         intent = result.intent
         if intent not in (Intent.PRODUCT_QUERY, Intent.OTHER, Intent.GREETING):
             return []
         if intent == Intent.PRODUCT_QUERY and (result.product_ids_asked or result.entities.items):
             return []
-        return self._faq_items(result, turn.text, keywords=intent != Intent.GREETING)
+        items = self._faq_items(result, turn.text, keywords=intent != Intent.GREETING)
+        if result.faq_ids or intent != Intent.PRODUCT_QUERY or not _asks_which(turn.text):
+            return items  # the model picked these itself, or nothing asks for the assortment
+        return [item for item in items if not _matched_stock_words_only(item, turn.text)]
 
     def _faq_answer(
         self, turn: _Turn, result: UnderstandingResult, language: str, *, items: list[FaqItem] | None = None
@@ -1678,6 +1701,21 @@ class DialogService:
         turn.history = history[-HISTORY_LIMIT:]
         return turn.history
 
+    def _repeats_last_reply(self, turn: _Turn, text: str) -> bool:
+        """Would this reply repeat the bot's previous one word for word?
+
+        Sending the same paragraph twice is the shape "the bot is stuck" takes: the customer
+        rephrases, a template comes back unchanged, and nothing moves. Whitespace and case do not
+        make two answers different, and an empty text is not a repeat. Only a reply to the
+        customer's own message counts — re-showing the summary after a map pin is not a repeat.
+        """
+        if turn.message is None:
+            return False  # a continuation the system started (a map pin, a receipt), not a re-ask
+        previous = next((entry for entry in reversed(self._history(turn)) if entry["role"] != "customer"), None)
+        if previous is None or previous["role"] == "operator":
+            return False
+        return bool(_squeeze(text)) and _squeeze(text) == _squeeze(previous["text"])
+
     def _reply_context(self, turn: _Turn) -> dict[str, Any]:
         """Wording context for the reply step (05 §6): the customer's words and the recent turns —
         so the answer picks up the thread — never a source of facts."""
@@ -1735,6 +1773,17 @@ class DialogService:
         wording = not template_only and self.settings.LLM_REPLY_WORDING_ENABLED
         llm = self.llm if wording else None
         reply = Responder(llm, catalog_names=[product.name for product in self._catalog(turn)]).generate_reply(plan)
+        if not handoff and self._repeats_last_reply(turn, reply.text):
+            # The customer asked again and would get the same words back: the bot has nothing to add,
+            # so a person takes over instead of repeating itself (dialog #42, 21.09.2026).
+            log_event(
+                logger,
+                "dialog.reply_repeated",
+                conversation_id=conversation.id,
+                message_id=turn.message.id if turn.message is not None else None,
+                kind=plan.kind.value,
+            )
+            return self._handoff(turn, REASON_REPEATED_REPLY, "repeated_reply", plan.language)
         log_event(
             logger,
             "dialog.reply",
@@ -1752,6 +1801,24 @@ class DialogService:
 
 
 # ====================================================================== module helpers
+
+
+def _squeeze(text: str) -> str:
+    """Text as the customer sees it: case and spacing do not make two answers different."""
+    return " ".join((text or "").split()).casefold()
+
+
+def _asks_which(text: str) -> bool:
+    """"Какие у вас есть?", "кадом намудаш ҳаст?" — the catalog answers this, not the FAQ."""
+    padded = f" {normalize_fold(text)} "
+    return any(f" {word} " in padded for word in WHICH_WORDS)
+
+
+def _matched_stock_words_only(item: FaqItem, text: str) -> bool:
+    """True when the entry was matched only by "в наличии"-style words (:data:`STOCK_KEYWORDS`)."""
+    padded = f" {normalize_fold(text)} "
+    matched = {key for keyword in item.keywords or [] if (key := normalize_fold(keyword)) and f" {key} " in padded}
+    return bool(matched) and matched <= STOCK_KEYWORDS
 
 
 def _has_order_fields(entities: Entities) -> bool:
