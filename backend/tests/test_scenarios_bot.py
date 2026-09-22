@@ -294,12 +294,14 @@ def test_greeting_detector(text: str | None, expected: Greeting | None) -> None:
         ("", SmallTalk.NONE),
         # Backing out before anything is placed (dialog #46, 21.09.2026)
         ("тогда не надо", SmallTalk.DECLINE),
-        ("дорого, спасибо", SmallTalk.DECLINE),  # a refusal, not gratitude
         ("не буду", SmallTalk.DECLINE),
         ("передумала", SmallTalk.DECLINE),
         ("даркор нест", SmallTalk.DECLINE),
-        ("дорого, а скидки есть?", SmallTalk.NONE),  # a question about price, not a refusal
         ("не надо доставку, сам заберу", SmallTalk.NONE),  # about the delivery type, not the order
+        # A complaint about the price is an objection the FAQ answers, never a goodbye (dialog #58)
+        ("дорого", SmallTalk.NONE),
+        ("дорого, спасибо", SmallTalk.NONE),
+        ("дорого, а скидки есть?", SmallTalk.NONE),
     ],
 )
 def test_small_talk_detector(text: str, expected: SmallTalk) -> None:

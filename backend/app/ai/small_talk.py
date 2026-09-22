@@ -214,9 +214,10 @@ _DONE = (
     "дигар лозим нест",
 )
 
-#: Backing out before anything is placed: "тогда не надо", "дорого, спасибо" (dialog #46,
-#: 21.09.2026). Only whole messages count (``detect_small_talk``), so "дорого, а скидки есть?" is a
-#: question, not a refusal. "Подумаю" is deliberately absent — that is a maybe, not a no.
+#: Backing out before anything is placed: "тогда не надо", "не буду" (dialog #46, 21.09.2026). Only
+#: whole messages count (``detect_small_talk``). "Подумаю" is deliberately absent — that is a maybe,
+#: not a no — and so is "дорого": a complaint about the price is an objection the FAQ answers
+#: ("Почему так дорого?", dialog #58, 22.09.2026), not a goodbye.
 _DECLINE = (
     "не надо",
     "тогда не надо",
@@ -229,8 +230,6 @@ _DECLINE = (
     "передумала",
     "откажусь",
     "отказываюсь",
-    "дорого",
-    "дороговато",
     "в другой раз",
     "как нибудь потом",
     "потом напишу",
@@ -244,8 +243,6 @@ _DECLINE = (
     "намехоҳам",
     "дигар вакт",
     "дигар вақт",
-    "кимат",
-    "қимат",
 )
 
 _GREETING_CATEGORY = "greeting:"
