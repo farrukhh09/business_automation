@@ -1,6 +1,7 @@
 """Conversations and messages (02-data-model.md; 04-api.md §11)."""
 
 from collections.abc import Iterable
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Select, func, select
@@ -46,6 +47,29 @@ class ConversationRepository(BaseRepository[Conversation]):
     def count_needing_attention(self) -> int:
         stmt = select(func.count()).select_from(Conversation).where(Conversation.needs_attention.is_(True))
         return int(self.db.execute(stmt).scalar_one())
+
+    def quiet_since(self, quiet_before: datetime, window_after: datetime, limit: int) -> list[Conversation]:
+        """Bot dialogs waiting for the customer: nothing said since ``quiet_before``, window still open.
+
+        The follow-up candidates of 03 §6a. ``window_after`` is "now − 24 h": a customer who wrote
+        earlier than that cannot be written to at all (06 §1), so there is nothing to consider.
+        An operator already looking at the dialog (``needs_attention``) answers instead of the bot.
+        """
+        stmt = (
+            select(Conversation)
+            .options(selectinload(Conversation.customer))
+            .where(
+                Conversation.mode == ConversationMode.AI,
+                Conversation.needs_attention.is_(False),
+                Conversation.last_message_at.is_not(None),
+                Conversation.last_message_at <= quiet_before,
+                Conversation.last_customer_message_at.is_not(None),
+                Conversation.last_customer_message_at > window_after,
+            )
+            .order_by(Conversation.last_message_at, Conversation.id)
+            .limit(max(int(limit), 1))
+        )
+        return list(self.db.scalars(stmt).all())
 
     def latest_for_customer(self, customer_id: int) -> Conversation | None:
         """The customer's most recently active conversation (``CustomerDetail.conversation_id``)."""

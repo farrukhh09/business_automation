@@ -88,6 +88,11 @@ class BusinessSettings(BaseModel):
     order_quantity_step: int = Field(default=1, ge=1, le=MAX_QUANTITY_RULE)
     min_lead_time_hours: int = Field(default=24, ge=0, le=24 * 30)
     max_days_ahead: int = Field(default=60, ge=1, le=366)
+    # Follow-up questions (03 §6a, 22.09.2026): while the bot is waiting for the customer, it asks
+    # once more by itself — "Вам коробочку оставить?", "Заказ оформляем?". The delay is capped below
+    # 24 h because Instagram closes the messaging window then (06 §1) and nothing could be sent.
+    follow_up_enabled: bool = True
+    follow_up_after_hours: int = Field(default=3, ge=1, le=23)
     delivery_time_window_minutes: int = Field(default=60, ge=0, le=12 * 60)
     route_start_time: HHMM = DEFAULT_ROUTE_START_TIME
     service_time_minutes: int = Field(default=5, ge=0, le=240)
@@ -151,6 +156,8 @@ class BusinessSettingsUpdate(BaseModel):
     order_quantity_step: int | None = Field(default=None, ge=1, le=MAX_QUANTITY_RULE)
     min_lead_time_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     max_days_ahead: int | None = Field(default=None, ge=1, le=366)
+    follow_up_enabled: bool | None = None
+    follow_up_after_hours: int | None = Field(default=None, ge=1, le=23)
     delivery_time_window_minutes: int | None = Field(default=None, ge=0, le=12 * 60)
     route_start_time: HHMM | None = None
     service_time_minutes: int | None = Field(default=None, ge=0, le=240)

@@ -34,6 +34,8 @@ interface FormState {
   order_quantity_step: string;
   min_lead_time_hours: string;
   max_days_ahead: string;
+  follow_up_enabled: boolean;
+  follow_up_after_hours: string;
   delivery_time_window_minutes: string;
   route_start_time: string;
   service_time_minutes: string;
@@ -66,6 +68,8 @@ function toFormState(settings: BusinessSettings): FormState {
     order_quantity_step: String(settings.order_quantity_step),
     min_lead_time_hours: String(settings.min_lead_time_hours),
     max_days_ahead: String(settings.max_days_ahead),
+    follow_up_enabled: settings.follow_up_enabled,
+    follow_up_after_hours: String(settings.follow_up_after_hours),
     delivery_time_window_minutes: String(settings.delivery_time_window_minutes),
     route_start_time: settings.route_start_time,
     service_time_minutes: String(settings.service_time_minutes),
@@ -102,6 +106,8 @@ function toUpdateBody(form: FormState): BusinessSettingsUpdate {
     order_quantity_step: Number(form.order_quantity_step),
     min_lead_time_hours: Number(form.min_lead_time_hours),
     max_days_ahead: Number(form.max_days_ahead),
+    follow_up_enabled: form.follow_up_enabled,
+    follow_up_after_hours: Number(form.follow_up_after_hours),
     delivery_time_window_minutes: Number(form.delivery_time_window_minutes),
     route_start_time: form.route_start_time,
     service_time_minutes: Number(form.service_time_minutes),
@@ -194,6 +200,11 @@ export default function SettingsPage() {
     if (!form.prepayment_percent || Number.isNaN(percent) || percent < 1 || percent > 100) {
       nextErrors.prepayment_percent = "Доля предоплаты: число от 1 до 100";
     }
+    // Больше суток напоминать нельзя: Instagram закрывает окно ответа через 24 часа (06 §1).
+    const followUpHours = Number(form.follow_up_after_hours);
+    if (!form.follow_up_after_hours || !Number.isInteger(followUpHours) || followUpHours < 1 || followUpHours > 23) {
+      nextErrors.follow_up_after_hours = "Напоминание: целое число от 1 до 23 часов";
+    }
     if (form.order_hours_start && form.order_hours_end && form.order_hours_end <= form.order_hours_start) {
       nextErrors.order_hours_end = "Окончание приёма заказов должно быть позже начала";
     }
@@ -279,6 +290,26 @@ export default function SettingsPage() {
               disabled={disabled}
               label="Голосовые ответы"
               description="Голосовые ответы недоступны на таджикском языке и отправляются только русскоязычным клиентам."
+            />
+            <Switch
+              checked={form.follow_up_enabled}
+              onCheckedChange={(value) => update("follow_up_enabled", value)}
+              disabled={disabled}
+              label="Догоняющие вопросы"
+              description="Клиент замолчал на середине заказа — бот один раз сам напомнит о себе: «Вам коробочку оставить?», «Заказ оформляем?». Диалоги, которые ведёт менеджер, не трогает."
+            />
+            <Input
+              label="Напоминать через, ч"
+              type="number"
+              min="1"
+              max="23"
+              step="1"
+              value={form.follow_up_after_hours}
+              onChange={(event) => update("follow_up_after_hours", event.target.value)}
+              disabled={disabled || !form.follow_up_enabled}
+              error={errors.follow_up_after_hours}
+              containerClassName="sm:max-w-xs"
+              hint="Через сколько часов тишины написать. Больше 23 нельзя: через сутки Instagram уже не пропустит сообщение"
             />
           </div>
         </SectionCard>

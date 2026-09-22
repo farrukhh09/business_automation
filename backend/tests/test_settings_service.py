@@ -30,6 +30,8 @@ CONTRACT_KEYS = {
     "order_quantity_step",
     "min_lead_time_hours",
     "max_days_ahead",
+    "follow_up_enabled",
+    "follow_up_after_hours",
     "delivery_time_window_minutes",
     "route_start_time",
     "service_time_minutes",
@@ -75,6 +77,8 @@ def test_defaults_when_nothing_stored(db: Session) -> None:
     assert (settings.order_hours_start, settings.order_hours_end) == (None, None)
     assert settings.min_lead_time_hours == 24
     assert settings.max_days_ahead == 60
+    # 03 §6a: the bot asks again by itself after three quiet hours, unless the owner switches it off
+    assert settings.follow_up_enabled is True and settings.follow_up_after_hours == 3
     assert settings.delivery_time_window_minutes == 60
     assert settings.route_start_time == time(9, 0)
     assert settings.service_time_minutes == 5

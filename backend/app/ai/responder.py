@@ -74,6 +74,7 @@ class ReplyKind(StrEnum):
     BLOCKED = "BLOCKED"  # customer is blacklisted by staff — fixed refusal, sent once
     ASK_RECEIPT = "ASK_RECEIPT"  # "оплатил" while a prepayment is awaited → "пришлите чек"
     RECEIPT_RESULT = "RECEIPT_RESULT"  # what the bot read on the receipt and whether it fits the order
+    FOLLOW_UP = "FOLLOW_UP"  # the bot asks again by itself while waiting for the customer (03 §6a)
 
 
 #: 05 §6: "Всегда шаблоном (без LLM)".
@@ -93,6 +94,7 @@ TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
         ReplyKind.BLOCKED,
         ReplyKind.ASK_RECEIPT,
         ReplyKind.RECEIPT_RESULT,  # amounts and wallet numbers exactly as checked
+        ReplyKind.FOLLOW_UP,  # nobody wrote anything to reply to — there is nothing for a model to word
     }
 )
 

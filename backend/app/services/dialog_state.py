@@ -32,6 +32,8 @@ PENDING_QUANTITY = "quantity"  # a product without a quantity
 PENDING_KINDS = frozenset({PENDING_GENERIC, PENDING_AMBIGUOUS, PENDING_QUANTITY})
 
 MAX_ADDRESS_CANDIDATES = 3
+#: How many follow-up marks the state keeps (03 §6a): enough for the stages of the order in hand.
+MAX_FOLLOW_UPS_REMEMBERED = 8
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -116,6 +118,9 @@ class DialogState:
     #: "Самое раннее — завтра после 18:00" offered in the last reply: ``{"date": ISO, "time": "HH:MM"}``.
     #: A "Да" to that reply takes the slot; any other message forgets it.
     offered_slot: dict[str, str] | None = None
+    #: Follow-ups already sent (03 §6a), as ``"{stage}:{order_id}"`` — one per stage of one order, so
+    #: a customer is never chased twice about the same thing. Only the last few are kept.
+    follow_ups_sent: list[str] = field(default_factory=list)
 
     @classmethod
     def from_json(cls, data: Any) -> "DialogState":
@@ -135,6 +140,7 @@ class DialogState:
             last_intent=data.get("last_intent") if isinstance(data.get("last_intent"), str) else None,
             blocked_notice_sent=bool(data.get("blocked_notice_sent")),
             offered_slot=_slot(data.get("offered_slot")),
+            follow_ups_sent=_str_list(data.get("follow_ups_sent"))[-MAX_FOLLOW_UPS_REMEMBERED:],
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -150,10 +156,22 @@ class DialogState:
             "last_intent": self.last_intent,
             "blocked_notice_sent": self.blocked_notice_sent,
             "offered_slot": dict(self.offered_slot) if self.offered_slot else None,
+            "follow_ups_sent": list(self.follow_ups_sent)[-MAX_FOLLOW_UPS_REMEMBERED:],
         }
 
     def pending_of(self, kind: str) -> list[dict[str, Any]]:
         return [entry for entry in self.pending_items if entry.get("kind") == kind]
+
+    def follow_up_key(self, stage: str, order_id: int | None) -> str:
+        return f"{stage}:{order_id if order_id is not None else '-'}"
+
+    def follow_up_sent(self, stage: str, order_id: int | None) -> bool:
+        return self.follow_up_key(stage, order_id) in self.follow_ups_sent
+
+    def remember_follow_up(self, stage: str, order_id: int | None) -> None:
+        key = self.follow_up_key(stage, order_id)
+        if key not in self.follow_ups_sent:
+            self.follow_ups_sent = [*self.follow_ups_sent, key][-MAX_FOLLOW_UPS_REMEMBERED:]
 
     def close_draft(self) -> None:
         """The draft was confirmed or cancelled: everything order-related is forgotten."""

@@ -29,6 +29,7 @@ TASK_MODULES: tuple[str, ...] = (
     "app.tasks.media",  # cleanup_media
     "app.tasks.delivery",  # geocode_delivery, optimize_routes, sync_delivery_statuses
     "app.tasks.reports",  # generate_daily_report, maybe_generate_daily_report
+    "app.tasks.follow_up",  # send_follow_ups
 )
 
 _NOT_TASK_MODULES = frozenset({"celery_app"})
@@ -59,6 +60,11 @@ def build_beat_schedule(settings: Settings, modules: list[str]) -> dict[str, dic
     entries: dict[str, dict[str, Any]] = {
         "maybe-generate-daily-report": {
             "task": "app.tasks.reports.maybe_generate_daily_report",
+            "schedule": crontab(minute="*/15"),
+        },
+        # 03 §6a: the delay is an admin setting, so the pass polls and decides — like the report above.
+        "send-follow-ups": {
+            "task": "app.tasks.follow_up.send_follow_ups",
             "schedule": crontab(minute="*/15"),
         },
         "sync-delivery-statuses": {

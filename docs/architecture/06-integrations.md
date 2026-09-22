@@ -89,6 +89,7 @@ class MaximIntegration(ABC):
 | `optimize_routes(date)` | построение маршрута (по запросу) |
 | `generate_daily_report(date?)` | построение/перестроение отчёта за дату (по запросу) |
 | `maybe_generate_daily_report()` | beat: каждые 15 мин; если бизнес-время ≥ `BusinessSettings.daily_report_time` (значение из админки; env `DAILY_REPORT_TIME` — только значение по умолчанию для настройки) и отчёт за сегодня ещё не сформирован после этого времени → `generate_daily_report(today)` |
+| `send_follow_ups()` | beat: каждые 15 мин; догоняющие вопросы в диалогах, где бот ждёт клиента (03 §6a). Задержка — настройка `follow_up_after_hours`, поэтому решает сама задача, а не расписание |
 | `sync_delivery_statuses()` | beat: каждые 15 мин, `MaximIntegration.get_delivery_status` для DISPATCHED (manual — no-op) |
 | `refresh_instagram_token()` | beat: раз в сутки |
 | `cleanup_media()` | beat: раз в сутки, TTS-файлы старше 7 дней |

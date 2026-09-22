@@ -1066,6 +1066,10 @@ export interface BusinessSettings {
   order_quantity_step: number;
   min_lead_time_hours: number;
   max_days_ahead: number;
+  /** The bot asks again by itself while it waits for the customer (03 §6a). */
+  follow_up_enabled: boolean;
+  /** Hours of silence before that question; 1..23 — Instagram closes the window after 24 h. */
+  follow_up_after_hours: number;
   delivery_time_window_minutes: number;
   /** "HH:MM" */
   route_start_time: ISOTime;

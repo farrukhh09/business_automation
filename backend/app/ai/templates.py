@@ -153,6 +153,14 @@ _TEXTS: dict[str, dict[str, str]] = {
         "cancel_kept": "Хорошо, заказ №{order_id} не отменяем.",
         # Nothing was placed yet, so there is no number to name and nothing to confirm.
         "draft_discarded": "Хорошо, ничего не записываем. Будут нужны синнамоны — напишите, соберём 🙂",
+        # Follow-ups (03 §6a): the bakery's own wording from the Instagram archive — «Вам коробку
+        # оставить или нет», «Вы заказываете или нет», «Мне для оформления заказа чек нужен или вы
+        # передумали?». A number is never named: the customer has no order yet, only a conversation.
+        "follow_up_draft": "Вам коробочку оставить? Напишите, пожалуйста, и мы всё оформим 🙂",
+        "follow_up_confirmation": (
+            "Подскажите, заказ оформляем? Напишите «Да» — и всё готово. Если передумали, просто скажите."
+        ),
+        "follow_up_receipt": "Мне для оформления заказа чек нужен, или вы передумали?",
         "handoff": "Передаю диалог менеджеру, он скоро ответит.",
         "handoff_complaint": "Извините за неудобства.",
         "handoff_order_locked": "Заказ №{order_id} уже в работе — изменения согласует менеджер.",
@@ -306,6 +314,11 @@ _TEXTS: dict[str, dict[str, str]] = {
         "cancelled": "Фармоиши №{order_id} бекор шуд.",
         "cancel_kept": "Хуб, фармоиши №{order_id}-ро бекор намекунем.",
         "draft_discarded": "Хуб, чизе сабт накардем. Синнамон даркор шавад — нависед, тайёр мекунем 🙂",
+        "follow_up_draft": "Қуттиро барои шумо монем? Нависед — фармоишро ба расмият медарорем 🙂",
+        "follow_up_confirmation": (
+            "Фармоишро қабул кунам ё не? «Ҳа» нависед — тайёр мекунем. Агар фикратон дигар шуда бошад, гӯед."
+        ),
+        "follow_up_receipt": "Барои ба расмият даровардани фармоиш чек лозим — ё фикратон дигар шуд?",
         "handoff": "Паёматонро ба менеҷер медиҳам, ӯ зуд ҷавоб медиҳад.",
         "handoff_complaint": "Барои нороҳатӣ мебахшед.",
         "handoff_order_locked": "Фармоиши №{order_id} аллакай дар кор аст — тағйиротро менеҷер ҳал мекунад.",
@@ -1042,6 +1055,21 @@ def _receipt_result(facts: Mapping[str, Any], missing_fields: Sequence[str], lan
     )
 
 
+#: Follow-up stages (03 §6a) → the text that asks about them.
+FOLLOW_UP_STAGE_KEYS: dict[str, str] = {
+    "draft": "follow_up_draft",
+    "confirmation": "follow_up_confirmation",
+    "receipt": "follow_up_receipt",
+}
+
+
+def _follow_up(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    """ "Вам коробочку оставить?" plus the one question the answer still waits for (03 §6a)."""
+    key = FOLLOW_UP_STAGE_KEYS.get(_text(facts.get("stage")), "follow_up_draft")
+    question = _questions(missing_fields, language)[:1]
+    return _paragraphs(_t(language, key), _join_questions(question, language))
+
+
 def _simple(key: str) -> Callable[[Mapping[str, Any], Sequence[str], str], str]:
     def render_simple(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
         return _t(language, key, order_id=_order_id(facts))
@@ -1074,6 +1102,7 @@ _RENDERERS: dict[str, Callable[[Mapping[str, Any], Sequence[str], str], str]] = 
     "BLOCKED": _simple("blocked"),
     "ASK_RECEIPT": _ask_receipt,
     "RECEIPT_RESULT": _receipt_result,
+    "FOLLOW_UP": _follow_up,
 }
 
 
