@@ -264,10 +264,18 @@ def fix_money(text: str, language: str) -> tuple[str, bool]:
 class Responder:
     """Turns a plan into text. ``llm=None`` (not configured) renders every kind by template."""
 
-    def __init__(self, llm: LLMClient | None = None, *, catalog_names: Iterable[str] = ()) -> None:
+    def __init__(
+        self,
+        llm: LLMClient | None = None,
+        *,
+        catalog_names: Iterable[str] = (),
+        allow_same_day: bool = False,
+    ) -> None:
         self._llm = llm
         self._catalog_names = [name for name in catalog_names if name and name.strip()]
-        self._guard = ResponseGuard(catalog_names=self._catalog_names)
+        # Everything is pre-order, so the bot may not promise today — unless the owner switched the
+        # lead time off, and then same-day really is possible (guard.py, ``_check_same_day``).
+        self._guard = ResponseGuard(catalog_names=self._catalog_names, allow_same_day=allow_same_day)
 
     def generate_reply(self, plan: ReplyPlan) -> Reply:
         template_text = templates.render(plan.kind, plan.language, plan.facts, plan.missing_fields)

@@ -1813,7 +1813,11 @@ class DialogService:
 
         wording = not template_only and self.settings.LLM_REPLY_WORDING_ENABLED
         llm = self.llm if wording else None
-        reply = Responder(llm, catalog_names=[product.name for product in self._catalog(turn)]).generate_reply(plan)
+        reply = Responder(
+            llm,
+            catalog_names=[product.name for product in self._catalog(turn)],
+            allow_same_day=turn.business.min_lead_time_hours <= 0,
+        ).generate_reply(plan)
         if not handoff and self._repeats_last_reply(turn, reply.text):
             # The customer asked again and would get the same words back: the bot has nothing to add,
             # so a person takes over instead of repeating itself (dialog #42, 21.09.2026).

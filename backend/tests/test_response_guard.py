@@ -189,6 +189,42 @@ def test_guard_result_shape() -> None:
     assert bool(failed) is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        # What the model actually answered «Я думала сейчас можете отправить» (live, 22.09.2026)
+        "Понимаем вас, сейчас отправим таксистом, как только всё будет готово.",
+        "Сегодня привезём, не переживайте.",
+        "Успеем сегодня, напишите адрес.",
+        "Испечём сейчас и отправим.",
+        "Хозир мефиристем.",
+    ],
+)
+def test_a_promise_to_send_today_is_refused(guard: ResponseGuard, text: str) -> None:
+    """Skipping the pre-order lead time is the owner's exception, never the bot's (03 §1.3)."""
+    result = check(guard, text)
+    assert not result.ok
+    assert any(violation.startswith("same_day_promise:") for violation in result.violations)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Сегодня, к сожалению, не получится — печём под заказ, за день.",
+        "Сейчас не отправляем: заказы принимаем на завтра.",
+        "Имруз намешавад, пагох тайёр мешавад.",
+        "Завтра отправим к 13:00.",
+    ],
+)
+def test_a_refusal_about_today_is_not_a_promise(guard: ResponseGuard, text: str) -> None:
+    assert check(guard, text).ok
+
+
+def test_same_day_is_allowed_when_the_owner_switched_the_lead_time_off() -> None:
+    same_day = ResponseGuard(allow_same_day=True)
+    assert check(same_day, "Сегодня отправим, всё готово.").ok
+
+
 def test_violations_never_contain_the_reply_text(guard: ResponseGuard, caplog: pytest.LogCaptureFixture) -> None:
     secret = "Адрес клиента: улица Рудаки 15, квартира 3"
     with caplog.at_level("WARNING"):

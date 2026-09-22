@@ -56,6 +56,20 @@ INSTAGRAM_TEXT_LIMIT_BYTES = 1000
 #: The only ReplyPlan kind allowed to state that an order is confirmed (05 §6).
 CONFIRMATION_KIND = "ORDER_CONFIRMED"
 
+#: Everything is baked to order, so the bot may not promise that it goes out today or right now:
+#: skipping the lead time is the owner's exception to make, never the bot's. Live on 22.09.2026 the
+#: model answered «Я думала сейчас можете отправить» with «сейчас отправим таксистом по Худжанду»,
+#: while the owner's own answer in the archive is «У нас предзаказ хотя бы за день». A negated
+#: sentence ("сегодня не отправим") is not a promise and stays allowed.
+_SAME_DAY_ACTIONS = r"отправ\w+|привез\w+|привоз\w+|достав\w+|испеч\w+|печ[её]м|сдела\w+|успе\w+|готов\w+"
+_TODAY_PROMISE_RES = (
+    re.compile(rf"\b(?:сегодня|сейчас)\b[^.!?]{{0,40}}?\b(?:{_SAME_DAY_ACTIONS})"),
+    re.compile(rf"\b(?:{_SAME_DAY_ACTIONS})[^.!?]{{0,40}}?\b(?:сегодня|сейчас)\b"),
+    re.compile(r"\b(?:имруз|хозир)\b[^.!?]{0,40}?\b(?:мефиристем|мефиристам|меорем|мерасонем|тайер|тайёр)"),
+)
+#: Words that turn such a sentence into a refusal instead of a promise.
+_NEGATIONS = (" не ", " нельзя", " никак", " наме", " нест")
+
 #: Claims the bot must never invent (SPEC §40: наличие, скидки, обещания).
 DEFAULT_FORBIDDEN_PHRASES = (
     "в наличии",
@@ -159,8 +173,10 @@ class ResponseGuard:
         *,
         catalog_names: Iterable[str] = (),
         forbidden_phrases: Iterable[str] = DEFAULT_FORBIDDEN_PHRASES,
+        allow_same_day: bool = False,
     ) -> None:
         self._catalog: dict[str, str] = {}
+        self._allow_same_day = allow_same_day
         for name in catalog_names:
             key = normalize_fold(name)
             if key:
@@ -188,6 +204,7 @@ class ResponseGuard:
 
         violations.extend(self._check_amounts(folded, allowed_amounts))
         violations.extend(self._check_confirmation(normalized, kind))
+        violations.extend(self._check_same_day(normalized))
         violations.extend(self._check_forbidden(normalized, allowed_phrases))
         violations.extend(self._check_products(normalized, allowed_product_names))
         if _FOREIGN_SCRIPT_RE.search(str(text)):
@@ -232,6 +249,17 @@ class ResponseGuard:
             match = pattern.search(normalized)
             if match:
                 violations.append(f"confirmation_claim:{match.group(0)}")
+        return violations
+
+    def _check_same_day(self, normalized: str) -> list[str]:
+        """A promise to bake, send or deliver today, which only the owner may make (see above)."""
+        if self._allow_same_day:
+            return []
+        violations: list[str] = []
+        for pattern in _TODAY_PROMISE_RES:
+            match = pattern.search(normalized)
+            if match and not any(word in f" {match.group(0)} " for word in _NEGATIONS):
+                violations.append(f"same_day_promise:{match.group(0)}")
         return violations
 
     def _check_forbidden(self, normalized: str, allowed_phrases: Iterable[str]) -> list[str]:
