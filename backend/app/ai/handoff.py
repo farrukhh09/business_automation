@@ -1,4 +1,8 @@
-"""Deterministic "call a human" detector (03-business-rules.md §6, 05-ai.md §1).
+"""Deterministic "call a human" detectors (03-business-rules.md §6, 05-ai.md §1).
+
+Two of them, both at step 2 of 05 §5: :func:`detect_operator_request` — the customer asks for a
+human; :func:`detect_our_fault` — the customer reports that we got something wrong, and the owner's
+rule is that such a dialog goes to the manager immediately (see that function's own notes).
 
 ``DialogService`` calls :func:`detect_operator_request` before anything else (05 §5, step 2):
 a match switches the conversation to ``HUMAN_HANDOFF``.  The LLM can request a handoff too
@@ -21,9 +25,9 @@ Rules (03 §6 keywords, made precise):
    a request.
 """
 
-from app.ai.text_normalize import tokenize
+from app.ai.text_normalize import build_phrase_index, scan_phrases, tokenize
 
-__all__ = ["detect_operator_request"]
+__all__ = ["detect_operator_request", "detect_our_fault"]
 
 #: How many preceding tokens are inspected for context/blockers.
 _CONTEXT_WINDOW = 3
@@ -201,5 +205,162 @@ def detect_operator_request(text: str | None) -> bool:
         if _is_blocked(window):
             continue
         if role or _has_person_context(tokens, index, window):
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------- our own mistake (03 §6)
+#
+# The owner's rule (22.09.2026): when something went wrong on the bakery's side, the bot does not
+# explain, apologize or negotiate — the manager takes the dialog over at once.  The model can reach
+# the same place with ``Intent.COMPLAINT``, and this detector is the deterministic half: without it a
+# "вы не тот вкус привезли" can still be answered from the FAQ because a keyword happened to match.
+#
+# The direction of a mistake is the opposite of the operator detector: handing a working dialog to a
+# human costs a little, leaving a real complaint to the bot costs a customer.  Still, the wordings
+# below are about something that *has already happened* — a question about the future ("а если не
+# привезёте вовремя?") is not a complaint and stays with the bot.
+
+#: A complaint on their own, in any inflection the customers use.
+_FAULT_PREFIXES = (
+    "перепутал",
+    "напутал",
+    "опозда",
+    "опаздыва",
+    "испорт",
+    "испорч",
+    "черств",
+    "засох",
+    "подгорел",
+    "несвеж",
+    "протух",
+    "плесен",
+    "невкусн",
+    "жалоб",
+    "жалу",
+    "жалов",
+    "претензи",
+    "хамств",
+    "нахамил",
+    "нагрубил",
+    "ужасн",
+    "отвратительн",
+    "безобрази",
+    "недолож",
+    "недовес",
+    "обсчитал",
+)
+#: Exact forms where a prefix would also catch an ordinary request ("задержите до вечера") or a
+#: question about trust the FAQ answers ("надеюсь, не обманете").
+_FAULT_TOKENS = frozenset(
+    {
+        "задержали",
+        "задержка",
+        "задерживается",
+        "обманули",
+        "обманул",
+        "обманула",
+        "кинули",
+        "воняет",
+        "сгорели",
+        "сгорел",
+        # Khujand Tajik: "не привезли", "не дошло", "не отправили", "испорчено"
+        "наовардед",
+        "наоварданд",
+        "наовард",
+        "нарасид",
+        "нарасиданд",
+        "нафиристодед",
+        "надодед",
+        "вайроншуда",
+        "бемазза",
+    }
+)
+#: Past-tense verbs that turn into a complaint only after "не": "не привезли", "не ответили".
+_UNDONE_PAST = frozenset(
+    {
+        "привезли",
+        "привез",
+        "привезла",
+        "привозили",
+        "доставили",
+        "доставил",
+        "приехал",
+        "приехали",
+        "приехала",
+        "пришел",
+        "пришла",
+        "пришли",
+        "прислали",
+        "прислал",
+        "получил",
+        "получила",
+        "получили",
+        "дождался",
+        "дождалась",
+        "ответили",
+        "ответил",
+        "ответила",
+        "отправили",
+        "отправил",
+        "позвонил",
+        "позвонили",
+        "передали",
+        "положили",
+        "оформили",
+        "сделали",
+    }
+)
+_FAULT_PHRASES = (
+    "не тот",
+    "не те",
+    "не такие",
+    "не хватает",
+    "не хватило",
+    "не понравилось",
+    "не понравились",
+    "не понравилась",
+    "плохое качество",
+    "плохого качества",
+    "не свежие",
+    "не свежий",
+    "до сих пор нет",
+    "до сих пор не",
+    "так и не",
+    "верните деньги",
+    "вернуть деньги",
+    "верните предоплату",
+    "возврат денег",
+    "деньги назад",
+    "испортили настроение",
+    # Khujand Tajik
+    "дер кардед",
+    "дер карданд",
+    "дер омад",
+    "дер овардед",
+    "дер оварданд",
+    "хунук буд",
+    "бад буд",
+    "нагз набуд",
+    "вайрон шуд",
+    "вайрон буд",
+    "фиреб додед",
+    "фиреб кардед",
+    "пулро баргардонед",
+)
+_FAULT_INDEX, _FAULT_MAX_LEN = build_phrase_index([("fault", _FAULT_PHRASES)])
+#: "не" may stand one word away from the verb: "мне так и не ответили", "заказ мой не привезли".
+_NEGATION_WINDOW = 2
+
+
+def detect_our_fault(text: str | None) -> bool:
+    """True when the customer reports that something went wrong on our side (03 §6).  Never raises."""
+    tokens = tokenize(text, fold=True)
+    if scan_phrases(tokens, _FAULT_INDEX, _FAULT_MAX_LEN):
+        return True
+    for index, token in enumerate(tokens):
+        if token.startswith(_FAULT_PREFIXES) or token in _FAULT_TOKENS:
+            return True
+        if token in _UNDONE_PAST and "не" in tokens[max(0, index - _NEGATION_WINDOW) : index]:
             return True
     return False

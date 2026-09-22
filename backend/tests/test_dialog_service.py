@@ -612,6 +612,32 @@ def test_operator_request_hands_over_without_the_llm(
     assert bot.conversation.needs_attention and bot.conversation.handoff_at is not None
 
 
+@pytest.mark.parametrize(
+    ("text", "apology"),
+    [
+        ("Заказ так и не привезли", "Извините за неудобства."),
+        ("Вы перепутали вкусы, я заказывала фисташковые", "Извините за неудобства."),
+        ("В коробке не хватает одного синнамона", "Извините за неудобства."),
+        ("Синнамоны пришли черствые", "Извините за неудобства."),
+        ("Шумо дер кардед, фармоиш нарасид", "Барои нороҳатӣ мебахшед."),
+    ],
+)
+def test_a_mistake_on_our_side_goes_to_the_manager_at_once(
+    db: Session, make_conversation: Callable[..., Conversation], text: str, apology: str
+) -> None:
+    """03 §6 (22.09.2026): the bot never explains our own mistake away — and never asks the model."""
+    llm = ScriptedLLM()
+    bot = Bot(db, make_conversation(), llm)
+
+    outcome = bot.say(text)
+
+    assert outcome.handoff and llm.json_calls == []
+    assert reply_text(outcome).startswith(apology)  # the apology comes before the handover line
+    db.refresh(bot.conversation)
+    assert bot.conversation.mode == ConversationMode.HUMAN_HANDOFF
+    assert bot.conversation.handoff_reason == "Клиент пишет о проблеме с нашей стороны"
+
+
 @pytest.mark.parametrize("error", [LLMUnavailableError(reason="timeout"), LLMRefusalError()])
 def test_llm_failure_hands_over(db: Session, make_conversation: Callable[..., Conversation], error: Exception) -> None:
     bot = Bot(db, make_conversation(), ScriptedLLM(default=error))

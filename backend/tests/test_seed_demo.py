@@ -7,8 +7,16 @@ from app.ai.text_normalize import normalize_fold
 from app.models.faq import FaqItem
 from app.models.product import Product
 from app.schemas.faq import FaqCreate
-from scripts.faq_data import FAQ, RETIRED_QUESTIONS
-from scripts.seed_demo import PRODUCTS, RETIRED_PRODUCT_NAMES, seed_faq, seed_products
+from app.services.settings_service import SettingsService
+from scripts.faq_data import FAQ, PREPAYMENT_QUESTIONS, RETIRED_QUESTIONS
+from scripts.seed_demo import (
+    PAYMENT_TEXT_PREPAID,
+    PRODUCTS,
+    RETIRED_PRODUCT_NAMES,
+    seed_faq,
+    seed_products,
+    seed_settings,
+)
 
 
 def test_faq_entries_are_valid_and_bilingual() -> None:
@@ -47,6 +55,41 @@ def test_refresh_rewrites_an_edited_answer(db: Session) -> None:
 
     assert seed_faq(db, refresh=True) == (0, 1, 0)
     assert edited.answer == FAQ[1]["answer"]
+
+
+def test_prepayment_answers_follow_the_switch(db: Session) -> None:
+    """22.09.2026: with «Предоплата» off the bot must not keep demanding a transfer it never asks for."""
+    assert set(PREPAYMENT_QUESTIONS) <= {entry["question"] for entry in FAQ}
+    seed_faq(db)
+    active = {item.question: item.is_active for item in db.scalars(select(FaqItem))}
+    assert not any(active[question] for question in PREPAYMENT_QUESTIONS)
+    assert active["Сколько стоит доставка?"] is True  # everything else is untouched
+
+    SettingsService(db).update({"prepayment_enabled": True})
+    assert seed_faq(db) == (0, 0, 0)  # switched back on, nothing retired
+    assert all(item.is_active for item in db.scalars(select(FaqItem)) if item.question in PREPAYMENT_QUESTIONS)
+
+    SettingsService(db).update({"prepayment_enabled": False})
+    assert seed_faq(db) == (0, 0, len(PREPAYMENT_QUESTIONS))
+
+
+def test_payment_text_follows_the_switch(db: Session) -> None:
+    """The payment policy in the settings says what the bot actually does — nothing while it is off."""
+    seed_settings(db)
+    assert SettingsService(db).get().payment_methods_text == ""
+
+    SettingsService(db).update({"prepayment_enabled": True})
+    seed_settings(db)
+    assert SettingsService(db).get().payment_methods_text == PAYMENT_TEXT_PREPAID
+
+    SettingsService(db).update({"prepayment_enabled": False})
+    seed_settings(db)
+    assert SettingsService(db).get().payment_methods_text == ""
+
+    owners_own = "Оплата по договорённости, спросите менеджера"
+    SettingsService(db).update({"payment_methods_text": owners_own})
+    seed_settings(db)
+    assert SettingsService(db).get().payment_methods_text == owners_own  # an edited text stays the owner's
 
 
 def test_products_are_priced_per_piece(db: Session) -> None:

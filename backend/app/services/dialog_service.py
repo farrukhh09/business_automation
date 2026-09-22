@@ -45,7 +45,7 @@ from app.ai.confirmation import (
     is_hesitation,
     mentions_cancellation,
 )
-from app.ai.handoff import detect_operator_request
+from app.ai.handoff import detect_operator_request, detect_our_fault
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
 from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention
@@ -164,6 +164,8 @@ MAX_TOOL_ROUNDS = 2
 
 REASON_OPERATOR_REQUEST = "Клиент попросил менеджера"
 REASON_COMPLAINT = "Жалоба клиента"
+#: 03 §6 (22.09.2026): a mistake on our side is never explained away by the bot — the manager answers.
+REASON_OUR_FAULT = "Клиент пишет о проблеме с нашей стороны"
 REASON_AI_UNAVAILABLE = "AI-ассистент недоступен"
 REASON_NOT_UNDERSTOOD = "Бот не смог понять клиента"
 REASON_REPEATED_REPLY = "Бот ответил бы теми же словами второй раз подряд — клиент спрашивает о другом"
@@ -314,6 +316,10 @@ class DialogService:
         offered, turn.state.offered_slot = turn.state.offered_slot, None  # valid for this one answer only
         if detect_operator_request(turn.text):
             return self._handoff(turn, REASON_OPERATOR_REQUEST, "operator_request", language)
+        if detect_our_fault(turn.text):
+            # "заказ не привезли", "перепутали вкусы": ours to fix, so the manager takes it over at
+            # once — the bot neither explains nor answers from the FAQ (03 §6, 22.09.2026).
+            return self._handoff(turn, REASON_OUR_FAULT, "complaint", language)
 
         if turn.state.awaiting in (AWAITING_CONFIRMATION, AWAITING_CANCEL_CONFIRMATION):
             outcome = self._answer_to_question(turn, language)

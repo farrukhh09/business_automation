@@ -1447,6 +1447,27 @@ def test_confirmation_asks_for_the_prepayment(
     assert "Предоплата 50% — 375 сомони: переведите" in reply_text(half)
 
 
+def test_with_payment_switched_off_the_bot_quotes_no_payment_rule(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    """22.09.2026: payment is off until the bot is ready, so its rules are off with it.
+
+    The FAQ answers about prepayment are seeded inactive while the switch is off (``seed_faq``), and
+    with no policy to state the payment question goes to the manager instead of a made-up answer.
+    """
+    from scripts.seed_demo import seed_faq
+
+    seed_faq(db)
+    llm = ScriptedLLM(default=understanding(intent="PAYMENT_QUERY"))
+    bot = Bot(db, make_conversation(), llm)
+
+    outcome = bot.say("Как оплатить? Можно наличными при получении?")
+
+    assert reply_text(outcome) == "Мне нужно уточнить эту информацию у менеджера."
+    db.refresh(bot.conversation)
+    assert bot.conversation.needs_attention
+
+
 @pytest.mark.usefixtures("pickup_settings", "prepayment")
 def test_the_account_may_be_a_card_number(
     db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation], media: MediaStorage

@@ -14,7 +14,8 @@ read on 21.09.2026), so it is what the owner really tells customers — prices, 
 pickup point, the days off and the prepayment policy. Two things are still the owner's to enter in
 the admin panel, because they are personal data this repository must not carry:
 
-* the payment number and the «Предоплата» switch («Настройки → Предоплата»);
+* the payment number and the «Предоплата» switch («Настройки → Предоплата») — the FAQ answers about
+  prepayment and the payment text follow that switch, so turning it on brings them back;
 * the exact pin of the kitchen on the map («Настройки → Склад»), used for route optimization.
 
 The catalog is priced PER ROLL, the way the bakery quotes it ("Классический 10, ягодный, шоколадный,
@@ -36,7 +37,7 @@ from app.models.product import Product
 from app.schemas.settings import BusinessSettings
 from app.services.product_service import ProductService
 from app.services.settings_service import SettingsService
-from scripts.faq_data import FAQ, RETIRED_QUESTIONS
+from scripts.faq_data import FAQ, PREPAYMENT_QUESTIONS, RETIRED_QUESTIONS
 
 PIECE_UNIT = "шт."
 #: Boxes of 4 seeded before 21.09.2026, replaced by the per-roll catalog below. They are switched
@@ -180,13 +181,6 @@ BUSINESS_SETTINGS: dict[str, Any] = {
     "min_order_quantity": 4,
     "order_quantity_step": 4,
     "min_lead_time_hours": 24,
-    # The account number and the «Предоплата» switch are the owner's to set («Настройки → Предоплата»);
-    # the bot names the number itself, so this text stays free of it.
-    "payment_methods_text": (
-        "Оплата только предоплатой: переводом на наш номер — его бот пришлёт после подтверждения заказа. "
-        "После перевода отправьте, пожалуйста, чек (скриншот) — по нему оформляем заказ. "
-        "Наличными при получении не принимаем."
-    ),
     "delivery_info_text": (
         "Доставка по Худжанду — 14 сомони, привозит таксист. За город — по договорённости, "
         "стоимость уточнит менеджер. Самовывоз бесплатный: Гульбахор, выносим к «Додо пицце»."
@@ -200,6 +194,21 @@ BUSINESS_SETTINGS: dict[str, Any] = {
         "longitude": 69.6191174,
     },
 }
+
+#: The payment policy text follows the «Предоплата» switch («Настройки»), so the bot never states a
+#: rule it does not apply (22.09.2026: payment is switched off until the bot is ready for real
+#: customers). The account number stays out of this file — the bot sends it from the settings.
+PAYMENT_TEXT_PREPAID = (
+    "Оплата только предоплатой: переводом на наш номер — его бот пришлёт после подтверждения заказа. "
+    "После перевода отправьте, пожалуйста, чек (скриншот) — по нему оформляем заказ. "
+    "Наличными при получении не принимаем."
+)
+#: Payment switched off: the bot has no policy to quote, so a payment question goes to the manager.
+PAYMENT_TEXT_OFF = ""
+
+
+def payment_methods_text(prepayment_enabled: bool) -> str:
+    return PAYMENT_TEXT_PREPAID if prepayment_enabled else PAYMENT_TEXT_OFF
 
 
 def seed_products(db: Session) -> tuple[int, int]:
@@ -227,13 +236,18 @@ def seed_faq(db: Session, refresh: bool = False) -> tuple[int, int, int]:
     An entry still holding the seeded answer gets the current keywords and Tajik texts; an answer
     edited in the admin panel marks the entry as the owner's and is left alone — unless ``refresh``
     is given, which rewrites every seeded question from this file (the owner's edits are lost).
+
+    The prepayment answers follow the «Предоплата» switch: switched off with it, switched back on
+    with it, so the bot never asks for a transfer the owner has turned off (22.09.2026).
     """
+    prepayment_enabled = SettingsService(db).get().prepayment_enabled
     existing = {item.question: item for item in db.scalars(select(FaqItem))}
     created = updated = 0
     for sort_order, data in enumerate(FAQ, start=1):
         item = existing.get(data["question"])
         if item is None:
-            db.add(FaqItem(**data, is_active=True, sort_order=sort_order * 10))
+            active = prepayment_enabled or data["question"] not in PREPAYMENT_QUESTIONS
+            db.add(FaqItem(**data, is_active=active, sort_order=sort_order * 10))
             created += 1
             continue
         stale = (
@@ -253,6 +267,11 @@ def seed_faq(db: Session, refresh: bool = False) -> tuple[int, int, int]:
         if item is not None and item.is_active:
             item.is_active = False
             retired += 1
+    for question in PREPAYMENT_QUESTIONS:
+        item = existing.get(question)
+        if item is not None and item.is_active != prepayment_enabled:
+            item.is_active = prepayment_enabled
+            retired += not prepayment_enabled
     db.commit()
     return created, updated, retired
 
@@ -263,12 +282,16 @@ def seed_settings(db: Session, refresh: bool = False) -> list[str]:
 
     ``refresh`` writes every setting of this file anyway (the texts seeded before the archive was
     read are replaced), but never moves the warehouse pin once it has coordinates.
+
+    The payment text is the one exception to "never overwrite": while it still holds one of the two
+    texts of this file, it follows the «Предоплата» switch instead of staying as it was.
     """
     service = SettingsService(db)
     current = service.get()
     defaults = BusinessSettings()
     patch: dict[str, Any] = {}
-    for key, value in BUSINESS_SETTINGS.items():
+    seeded = {**BUSINESS_SETTINGS, "payment_methods_text": payment_methods_text(current.prepayment_enabled)}
+    for key, value in seeded.items():
         if key == "warehouse":
             if current.warehouse.latitude is None or current.warehouse.longitude is None:
                 patch[key] = value
@@ -276,7 +299,8 @@ def seed_settings(db: Session, refresh: bool = False) -> list[str]:
                 patch[key] = {key_: value_ for key_, value_ in value.items() if key_ in ("name", "address")}
             continue
         stored = getattr(current, key)
-        if refresh or not stored or stored == getattr(defaults, key):
+        ours = key == "payment_methods_text" and stored.strip() in (PAYMENT_TEXT_PREPAID, PAYMENT_TEXT_OFF)
+        if refresh or ours or not stored or stored == getattr(defaults, key):
             patch[key] = value
     if patch:
         service.update(patch)
@@ -289,7 +313,9 @@ def main(argv: list[str] | None = None) -> int:
         products, retired_products = seed_products(db)
         faq, faq_updated, faq_retired = seed_faq(db, refresh=refresh)
         settings = seed_settings(db, refresh=refresh)
+        prepayment_enabled = SettingsService(db).get().prepayment_enabled
     print(f"Товаров добавлено: {products} (всего в наборе {len(PRODUCTS)}), отключено старых: {retired_products}")
+    print(f"Предоплата: {'включена' if prepayment_enabled else 'выключена'} — ответы про оплату следуют за ней")
     print(
         f"Вопросов FAQ добавлено: {faq}, обновлено: {faq_updated}, отключено: {faq_retired} "
         f"(всего в наборе {len(FAQ)})"
