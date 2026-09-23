@@ -9,7 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.conversation import Conversation, Message
 from app.models.customer import Customer
-from app.models.enums import ConversationMode
+from app.models.enums import ConversationMode, MessageDirection, MessageSender
 from app.repositories.base import BaseRepository, coerce_enum
 from app.repositories.customers import customer_search_condition
 
@@ -110,6 +110,17 @@ class MessageRepository(BaseRepository[Message]):
             .limit(max(int(limit), 1))
         )
         return list(reversed(self.db.scalars(stmt).all()))
+
+    def has_operator_message_since(self, conversation_id: int, since: datetime | None) -> bool:
+        """Has a person written to the customer since ``since`` (any time when ``None``)? (03 §6)"""
+        stmt = select(Message.id).where(
+            Message.conversation_id == conversation_id,
+            Message.direction == MessageDirection.OUTGOING,
+            Message.sender == MessageSender.OPERATOR,
+        )
+        if since is not None:
+            stmt = stmt.where(Message.created_at >= since)
+        return self.db.scalars(stmt.limit(1)).first() is not None
 
     def last_for_conversations(self, conversation_ids: Iterable[int]) -> dict[int, Message]:
         """``{conversation_id: last message}`` in one query (list previews)."""

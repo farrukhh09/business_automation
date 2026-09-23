@@ -38,7 +38,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.ai.catalog import flavour_bases
+from app.ai.catalog import flavour_bases, sized_products
 from app.ai.confirmation import (
     ConfirmationDecision,
     classify_cancel_confirmation,
@@ -49,7 +49,14 @@ from app.ai.confirmation import (
 from app.ai.handoff import detect_operator_request, detect_our_fault
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
-from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention, is_mix_mention
+from app.ai.product_matcher import (
+    MatchStatus,
+    ProductMatcher,
+    is_general_mention,
+    is_generic_mention,
+    is_mix_mention,
+    off_catalog_mentions,
+)
 from app.ai.receipt import (
     MIN_CONFIDENCE,
     EarlierReceipt,
@@ -76,6 +83,7 @@ from app.ai.tools import ToolContext, ToolRegistry, product_view, tool_definitio
 from app.ai.understanding import (
     MAX_QUANTITY,
     Entities,
+    ItemMention,
     ItemsMode,
     OtherTopic,
     UnderstandingContext,
@@ -150,6 +158,7 @@ from app.services.order_validator import (
     allowed_quantity_examples,
     next_open_day,
     order_quantity,
+    quantity_problem,
     smallest_allowed_quantity,
 )
 from app.services.phone import normalize_phone
@@ -162,6 +171,8 @@ __all__ = ["FAILED_ATTEMPTS_LIMIT", "DialogOutcome", "DialogService"]
 #: 03 §6: two failed attempts in a row hand the dialog over.
 FAILED_ATTEMPTS_LIMIT = 2
 HISTORY_LIMIT = 20
+#: At most this many FAQ answers in one reply: more is the wall of text again.
+MAX_FAQ_ANSWERS = 3
 REPLY_HISTORY_LIMIT = 6  # recent turns the reply step sees for continuity (05 §6)
 MAX_TOOL_ROUNDS = 2
 
@@ -192,9 +203,35 @@ ABANDON_REASON = "Черновик не завершён клиентом — н
 #: Facts of a question asked together with order data ("а доставка платная?"), answered in the same reply.
 ANSWERS_FACT = "answers"
 
-_BARE_NUMBER_RE = re.compile(
-    r"^\s*(\d{1,3})\s*(?:шт\.?|штук[аи]?|дона|pcs|кор\.?|коробк[а-я]*|қуттӣ|куттӣ)?\s*[.!]?\s*$", re.IGNORECASE
+#: Handoffs the bot caused itself (03 §6). Until a person writes to the customer, the bot keeps
+#: answering plain questions from the data — where we are, the flavours, delivery — instead of
+#: leaving them in silence: in dialog #3 (23.09.2026) six questions in a row went unanswered for an
+#: hour after a handoff. A customer who asked for a person or complained is left to the person.
+ASSIST_REASON_PREFIXES: tuple[str, ...] = (
+    REASON_REPEATED_REPLY,
+    REASON_NOT_UNDERSTOOD,
+    REASON_IMAGE,
+    REASON_RECEIPT_UNREAD,
+    REASON_ORDER_LOCKED.split("{", 1)[0],
+    REASON_CANCEL_LOCKED.split("{", 1)[0],
 )
+
+#: "Сколько стоит", "цена", "нархаш чанд": the message asks the price, so the catalog answers it even
+#: when an FAQ keyword matches too — "Асалом цена за шт?" got "по одной штуке не продаём" and no
+#: price at all (audit of the Direct archive, 23.09.2026). Matched on ``normalize_fold`` text.
+_PRICE_RE = re.compile(
+    r"\b(?:цен[аыуеой]?|ценник\w*|стоит(?!\s+(?:ли|брать|того|попробовать))|стоят|стоимост\w*|почем|прайс\w*|"
+    r"сколько\s+будет|нарх\w*|кимат\w*|"
+    r"чанд?\s*пул\w*|чанд?\s*с[уо]м\w*|чанба|чандба|донаш\s+чанд?)\b"
+)
+
+_BARE_NUMBER_RE = re.compile(
+    r"^\s*(?:(?:давайте|давай|тогда|ну|хорошо|ладно|ок|пусть|майлаш|майли|хоп|боша)[\s,]+)*"
+    r"(\d{1,3})\s*(?:шт\.?|штук[аи]?|дона|pcs|кор\.?|коробк[а-я]*|қуттӣ|куттӣ)?\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+#: "по одному каждого", "по 1", "аз ҳар кадом якто": one of each flavour.
+_ONE_OF_EACH_RE = re.compile(r"\bпо\s+(?:одному|одной|одну|1)\b|\bякто\b|\bякта\b")
 
 #: Agreement to an offered time that the strict order confirmation reads as UNCERTAIN ("давайте", "ок",
 #: "майлаш"): enough to take the slot the bot itself proposed, never to confirm an order.
@@ -217,6 +254,31 @@ WHICH_WORDS = frozenset(
 #: about today (dialog #42, 21.09.2026). An FAQ entry matched only by these loses to the catalog.
 STOCK_KEYWORDS = frozenset(
     {"в наличии", "есть в наличии", "готовые есть", "есть сейчас", "сейчас есть", "баного", "хаст ми", "хастми"}
+)
+
+#: Replies that answer a question, and the intents each of them already covers: the message's other
+#: questions are answered under them (``_side_answers``).
+_SIDE_COVERED: dict[ReplyKind, frozenset[Intent]] = {
+    ReplyKind.FAQ_ANSWER: frozenset({Intent.FAQ}),
+    ReplyKind.PRODUCT_INFO: frozenset({Intent.PRODUCT_QUERY}),
+    ReplyKind.UNKNOWN_PRODUCT: frozenset({Intent.PRODUCT_QUERY}),
+    ReplyKind.DELIVERY_INFO: frozenset({Intent.DELIVERY_QUERY}),
+    ReplyKind.PAYMENT_INFO: frozenset({Intent.PAYMENT_QUERY}),
+    ReplyKind.ORDER_STATUS_INFO: frozenset({Intent.ORDER_STATUS}),
+    ReplyKind.NEED_MANAGER: frozenset(),
+}
+#: Replies that have a second wording for when they would come out the same twice in a row.
+AGAIN_KINDS = frozenset({ReplyKind.NEED_MANAGER, ReplyKind.SMALL_TALK, ReplyKind.GREETING, ReplyKind.UNKNOWN_PRODUCT})
+#: What the bot may still say while the dialog waits for the manager (03 §6): answers from the data.
+ASSIST_KINDS = frozenset(
+    {
+        ReplyKind.FAQ_ANSWER,
+        ReplyKind.PRODUCT_INFO,
+        ReplyKind.UNKNOWN_PRODUCT,
+        ReplyKind.DELIVERY_INFO,
+        ReplyKind.PAYMENT_INFO,
+        ReplyKind.ORDER_STATUS_INFO,
+    }
 )
 
 #: Intents that ask something and must be answered, even when the message carries order data.
@@ -257,6 +319,17 @@ class _Turn:
     history: list[dict[str, str]] | None = None
     #: The price list picture this reply goes with (03 §1.4), by media file name.
     image: str | None = None
+    #: What the model read in this message — the other questions in it are answered too (``answers``).
+    result: UnderstandingResult | None = None
+    #: The dialog is with the manager after a handoff the bot caused, and nobody has answered yet:
+    #: only plain questions are answered, from the data, and nothing about an order is touched (03 §6).
+    assist: bool = False
+    #: ``_asked_products`` of ``result``, computed once: (result, known products, unknown words).
+    asked: tuple[Any, list[Product], list[str]] | None = None
+    #: The model failed on this message: the reply is a template, not a second call that may fail too.
+    no_model: bool = False
+    #: ``state.offered_slot`` as this message found it (``_keep_offered_slot``).
+    offer_at_start: dict[str, str] | None = None
 
 
 class DialogService:
@@ -320,13 +393,17 @@ class DialogService:
                 return self._handoff(turn, REASON_IMAGE, "image", language)
         if not turn.text:
             return self._finish(turn, ReplyPlan(ReplyKind.CLARIFY, language), reset_attempts=False)
-        offered, turn.state.offered_slot = turn.state.offered_slot, None  # valid for this one answer only
+        # Valid while the time is still open (``_keep_offered_slot``): "На завтра можем не раньше 18:00.
+        # К какому времени? Номер телефона?" → the phone → "К какому времени?" → "да" takes 18:00.
+        offered = turn.offer_at_start = turn.state.offered_slot
         if detect_operator_request(turn.text):
             return self._handoff(turn, REASON_OPERATOR_REQUEST, "operator_request", language)
         if detect_our_fault(turn.text):
             # "заказ не привезли", "перепутали вкусы": ours to fix, so the manager takes it over at
             # once — the bot neither explains nor answers from the FAQ (03 §6, 22.09.2026).
             return self._handoff(turn, REASON_OUR_FAULT, "complaint", language)
+        if turn.assist:
+            return self._assist(turn, language)
 
         if turn.state.awaiting in (AWAITING_CONFIRMATION, AWAITING_CANCEL_CONFIRMATION):
             outcome = self._answer_to_question(turn, language)
@@ -360,6 +437,9 @@ class DialogService:
                 error=type(exc).__name__,
                 reason=getattr(exc, "reason", None),
             )
+            outcome = self._without_model(turn, language)
+            if outcome is not None:
+                return outcome
             return self._handoff(turn, REASON_AI_UNAVAILABLE, "ai_unavailable", language, reset_attempts=False)
 
         language = detect_language(turn.text, result.language, self._known_language(turn), self._catalog_phrases(turn))
@@ -404,14 +484,39 @@ class DialogService:
         )
 
     def _skip_reason(self, turn: _Turn) -> DialogOutcome | None:
-        """05 §5 step 1 / 03 §6: the bot is silent; the operator sees the new message."""
+        """05 §5 step 1 / 03 §6: the bot is silent; the operator sees the new message.
+
+        One exception: a handoff the bot caused itself, while no person has written yet — then
+        plain questions are still answered from the data (``_may_assist``).
+        """
         if turn.business.ai_enabled and turn.conversation.mode != ConversationMode.HUMAN_HANDOFF:
             return None
         reason = "ai_disabled" if not turn.business.ai_enabled else "human_handoff"
         turn.conversation.needs_attention = True
         self.db.commit()
+        if reason == "human_handoff" and self._may_assist(turn):
+            turn.assist = True
+            turn.actions.append("assist")
+            return None
         log_event(logger, "dialog.skipped", conversation_id=turn.conversation.id, reason=reason)
         return DialogOutcome(actions=[reason])
+
+    def _may_assist(self, turn: _Turn) -> bool:
+        """03 §6: may the bot answer a plain question while the dialog waits for the manager?
+
+        Only after a handoff the bot caused itself (``ASSIST_REASON_PREFIXES``), only for a text
+        message, and only until a person takes the dialog or writes to the customer — from then on
+        the manager leads and the bot is silent, as before.
+        """
+        conversation = turn.conversation
+        message = turn.message
+        if message is None or message.message_type == MessageType.IMAGE or not turn.text:
+            return False
+        if conversation.assigned_user_id is not None:
+            return False
+        if not (conversation.handoff_reason or "").startswith(ASSIST_REASON_PREFIXES):
+            return False
+        return not self.messages.has_operator_message_since(conversation.id, conversation.handoff_at)
 
     def _blocked_reason(self, turn: _Turn) -> DialogOutcome | None:
         """A staff-blacklisted customer (03 §2): one fixed refusal, then silence — never the LLM."""
@@ -481,6 +586,8 @@ class DialogService:
         order = self._draft(turn)
         if order is None or order.delivery_time is not None:
             return None
+        if order.delivery_date is not None and order.delivery_date.isoformat() != offered["date"]:
+            return None  # the customer has moved to another day since the offer
         agrees = classify_confirmation(turn.text) == ConfirmationDecision.YES
         if not agrees and _AGREEMENT_PUNCT_RE.sub(" ", normalize_fold(turn.text)).split() not in _SLOT_AGREEMENTS:
             return None
@@ -488,6 +595,7 @@ class DialogService:
         if OrderValidator.slot_problems(slot_date, slot_time, turn.business):
             return None
         self._mark_processed(turn, {"offered_slot": offered})
+        turn.state.offered_slot = None
         turn.tools.update_order_draft(order, **{DELIVERY_DATE: slot_date, DELIVERY_TIME: slot_time})
         turn.actions.append("offered_slot_taken")
         return self._continue_order(turn, order, language)
@@ -505,6 +613,9 @@ class DialogService:
         if state.awaiting == AWAITING_ADDRESS_CHOICE and 1 <= number <= len(state.address_candidates):
             self._mark_processed(turn, {"address_choice": number})
             return self._apply_address_choice(turn, order, number, language)
+        mix_pending = [entry for entry in state.pending_items if entry["kind"] == PENDING_GENERIC and entry.get("mix")]
+        if state.awaiting == AWAITING_MISSING_FIELDS and len(state.pending_items) == 1 and mix_pending:
+            return self._mix_count(turn, order, mix_pending[0], number, language)
         quantity_pending = state.pending_of(PENDING_QUANTITY)
         other_pending = [entry for entry in state.pending_items if entry.get("kind") != PENDING_QUANTITY]
         if (
@@ -520,6 +631,27 @@ class DialogService:
             self._write_items(turn, order, [item], "add")
             return self._continue_order(turn, order, language)
         return None
+
+    def _mix_count(
+        self, turn: _Turn, order: Order, pending: dict[str, Any], number: int, language: str
+    ) -> DialogOutcome | None:
+        """ "6" / "давайте 6" to "Сколько штук?" or "Или сделаем 6 — по одному каждого?" about a mix.
+
+        A count the flavours divide evenly assembles the mix at once; another count becomes the
+        question "which ones?" for exactly that many (03 §1.3). No model is needed for a number.
+        """
+        flavours = flavour_bases(self._catalog(turn))
+        if len(flavours) < 2 or not 1 <= number <= MAX_QUANTITY:
+            return None
+        self._mark_processed(turn, {"mix_count": number})
+        if number % len(flavours):
+            pending["quantity"] = number
+            return self._continue_order(turn, order, language)
+        turn.state.pending_items = []
+        each = number // len(flavours)
+        items = [{"product_id": product.id, "quantity": each, "comment": None} for product in flavours]
+        self._write_items(turn, order, items, "add")
+        return self._continue_order(turn, order, language)
 
     def _understand(self, turn: _Turn) -> UnderstandingResult:
         llm = self.llm
@@ -553,6 +685,89 @@ class DialogService:
             max_tool_rounds=MAX_TOOL_ROUNDS,
         )
 
+    def _assist(self, turn: _Turn, language: str) -> DialogOutcome:
+        """03 §6: a message while the dialog waits for the manager after a handoff the bot caused.
+
+        A plain question is answered from the data — the FAQ, the catalog, delivery and payment
+        settings, the customer's own orders. Nothing else gets a word from the bot: no greeting back,
+        no order taken, no draft touched, no "уточню у менеджера" (the manager is already called).
+        """
+        if detect_small_talk(turn.text) is not SmallTalk.NONE:
+            return self._assist_silent(turn)
+        try:
+            result = self._understand(turn)
+        except (LLMError, IntegrationNotConfiguredError):
+            return self._assist_silent(turn)
+        language = detect_language(turn.text, result.language, self._known_language(turn), self._catalog_phrases(turn))
+        self._record_understanding(turn, result, language)
+        turn.result = result
+        if result.intent == Intent.OPERATOR_REQUEST:
+            return self._handoff(turn, REASON_OPERATOR_REQUEST, "operator_request", language)
+        if result.intent == Intent.COMPLAINT:
+            return self._handoff(turn, REASON_COMPLAINT, "complaint", language)
+        entities = result.entities
+        if result.intent in ORDER_INTENTS or result.intent == Intent.CANCEL_ORDER or entities.items:
+            return self._assist_silent(turn)  # the order is the manager's now
+        if _has_order_data(entities):
+            return self._assist_silent(turn)
+        if _payment_topic(turn.text) and self._payment_off(turn):
+            return self._assist_silent(turn)  # payment is the manager's while it is switched off (03 §3)
+        main = self._main_intent(turn, result)
+        faq_items = self._faq_first(turn, result, main)
+        if faq_items:
+            return self._faq_answer(turn, result, language, items=faq_items)
+        if main == Intent.PRODUCT_QUERY or self._asks_about_products(turn, result, main):
+            return self._product_query(turn, result, language)
+        handlers: dict[Intent, Callable[[_Turn, UnderstandingResult, str], DialogOutcome]] = {
+            Intent.FAQ: self._faq_answer,
+            Intent.ORDER_STATUS: self._order_status,
+            Intent.DELIVERY_QUERY: self._delivery_query,
+            Intent.PAYMENT_QUERY: self._payment_query,
+        }
+        handler = handlers.get(main)
+        return handler(turn, result, language) if handler is not None else self._assist_silent(turn)
+
+    def _without_model(self, turn: _Turn, language: str) -> DialogOutcome | None:
+        """The model did not answer (a timeout, a rate limit — 05 §2). A plain question the data
+        answers on its own is still answered, by template: the price list, "какие есть?", an FAQ
+        entry found by the owner's keywords, a food we do not make. In the replay of the Direct
+        archive (23.09.2026) "Где находится ваш кафе" got "передаю менеджеру" only because the model
+        timed out. ``None`` — nothing safe to say: the manager takes the dialog, as before.
+
+        An order being filled is never guessed at without the model: its data needs reading.
+        """
+        if self._draft(turn) is not None or not self._catalog(turn):
+            return None
+        turn.no_model = True
+        # "Какая калорийность?" has a "which" word and is not about the assortment: without the model
+        # only a price or a "which flavours / what do you have" question gets the price list.
+        asks_catalog = _price_question(turn.text) or (_asks_which(turn.text) and _ASSORTMENT_RE.search(
+            normalize_fold(turn.text)
+        ) is not None)
+        result = UnderstandingResult(intent=Intent.PRODUCT_QUERY if asks_catalog else Intent.OTHER)
+        turn.result = result
+        self._mark_processed(turn, {"understanding": None, "without_model": True})
+        if _payment_topic(turn.text) and self._payment_off(turn):
+            return self._need_manager(turn, language)  # 03 §3: payment is the manager's while it is off
+        if asks_catalog:
+            return self._product_query(turn, result, language)
+        known, unknown = self._asked_products(turn, result)
+        if unknown or known:
+            return self._product_query(turn, result, language)
+        items = self._faq_items(result, turn.text)
+        if items:
+            return self._faq_answer(turn, result, language, items=items)
+        return None
+
+    def _assist_silent(self, turn: _Turn) -> DialogOutcome:
+        """Nothing the bot may say while the manager is being waited for: the message waits for them."""
+        if turn.message is not None:
+            turn.message.ai_processed = True
+        turn.conversation.state = turn.state.to_json()
+        self.db.commit()
+        log_event(logger, "dialog.skipped", conversation_id=turn.conversation.id, reason="assist_silent")
+        return DialogOutcome(actions=[*turn.actions, "assist_silent"])
+
     def _record_understanding(self, turn: _Turn, result: UnderstandingResult, language: str) -> None:
         turn.state.last_intent = result.intent.value
         if turn.message is not None:
@@ -572,6 +787,7 @@ class DialogService:
     # ================================================================== step 6: routing
 
     def _route(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
+        turn.result = result
         intent = result.intent
         if intent == Intent.OPERATOR_REQUEST:
             return self._handoff(turn, REASON_OPERATOR_REQUEST, "operator_request", language)
@@ -588,9 +804,21 @@ class DialogService:
         if self._is_order_message(turn, result):
             return self._order_flow(turn, result, language)
 
-        faq_items = self._faq_first(turn, result)
+        intent = self._main_intent(turn, result)
+        if _payment_topic(turn.text) and self._payment_off(turn):
+            # 03 §3: while payment is switched off, a payment question is the manager's. The model
+            # answered «Предоплата нужна?» with the FAQ about trust ("в первый раз всегда так") —
+            # the closest entry it could find (audit 23.09.2026). Its FAQ choice stands only where
+            # the owner's own keywords confirm it; the payment part is "уточню у менеджера".
+            result = result.model_copy(update={"faq_ids": self._confirmed_faq_ids(result, turn.text)})
+            turn.result = result
+        faq_items = self._faq_first(turn, result, intent)
         if faq_items:
             return self._faq_answer(turn, result, language, items=faq_items)
+        if self._asks_about_products(turn, result, intent):
+            # "а пирожки вы печёте?" read as OTHER or as a greeting: a question about products is
+            # answered from the catalog — "такого у нас нет" included — never by the manager.
+            return self._product_query(turn, result, language)
         if intent == Intent.OTHER and result.other_topic is OtherTopic.SMALL_TALK:
             return self._small_talk(turn, "chat", language)
         if intent == Intent.OTHER and result.other_topic is OtherTopic.QUESTION:
@@ -614,6 +842,8 @@ class DialogService:
     def _is_order_message(self, turn: _Turn, result: UnderstandingResult) -> bool:
         if result.intent in ORDER_INTENTS:
             return True
+        if self._draft(turn) is not None and _open_generic(turn.state) and is_mix_mention(turn.text):
+            return True  # "все разные" answers the open "какие именно?", whatever the model called it
         entities = result.entities
         if ORDER_INTENTS & set(result.secondary_intents):
             # "Хочу заказать синнамоны, какие у вас есть в наличии?" (dialog #42, 21.09.2026): the
@@ -701,7 +931,83 @@ class DialogService:
         facts["greeting"] = greeting.value
         return self._finish(turn, ReplyPlan(ReplyKind.GREETING, language, facts, fields))
 
-    def _faq_first(self, turn: _Turn, result: UnderstandingResult) -> list[FaqItem]:
+    def _main_intent(self, turn: _Turn, result: UnderstandingResult) -> Intent:
+        """The question the reply leads with. A price or assortment question asked next to another
+        one leads: the price list (or its photo) is the bulk of the answer, and the other question is
+        answered under it (``answers``) — "Они свежие? И сколько стоят?" used to lose the prices."""
+        intent = result.intent
+        if Intent.PRODUCT_QUERY not in result.secondary_intents:
+            return intent
+        if intent not in (Intent.FAQ, Intent.DELIVERY_QUERY, Intent.PAYMENT_QUERY, Intent.GREETING, Intent.OTHER):
+            return intent
+        asks = (
+            _price_question(turn.text)
+            or _asks_which(turn.text)
+            or bool(result.product_ids_asked)
+            or any(self._asked_products(turn, result))
+        )
+        return Intent.PRODUCT_QUERY if asks else intent
+
+    def _asks_about_products(self, turn: _Turn, result: UnderstandingResult, intent: Intent) -> bool:
+        """Does a message that is not a product question still ask about products ("а пирожки вы
+        печёте?" read as OTHER)? For an FAQ question only when the FAQ has no answer to it."""
+        if intent == Intent.PRODUCT_QUERY:
+            return False
+        if intent == Intent.FAQ and self._faq_items(result, turn.text):
+            return False  # "трайфл есть? можно у вас посидеть?" — the FAQ answers, the rest goes under it
+        if intent not in (Intent.OTHER, Intent.FAQ, Intent.GREETING):
+            return False
+        known, unknown = self._asked_products(turn, result)
+        return bool(known or unknown)
+
+    def _asked_products(self, turn: _Turn, result: UnderstandingResult) -> tuple[list[Product], list[str]]:
+        """What a question asks about: catalog products, and the words that name nothing we sell.
+
+        From the model's ids, its ``products_asked_text`` and — for a product question — the items it
+        read; a word for the assortment as a whole ("синнамоны", "десерты", "коробка") is neither,
+        the whole price list answers it. When the model recorded no words at all, the message is
+        searched for foods the catalog lacks (``off_catalog_mentions``): "а пирожки вы печёте?" must
+        get "пирожков нет" whatever the model did with it (dialog #155, 23.09.2026).
+        """
+        if turn.asked is not None and turn.asked[0] is result:
+            return turn.asked[1], turn.asked[2]
+        products = self._catalog(turn)
+        by_id = {product.id: product for product in products}
+        matcher = ProductMatcher(products)
+        known = [by_id[product_id] for product_id in result.product_ids_asked if product_id in by_id]
+        unknown: list[str] = []
+        texts = list(result.products_asked_text)
+        if result.intent == Intent.PRODUCT_QUERY:
+            for mention in result.entities.items:
+                if mention.product_id in by_id and not is_generic_mention(mention.product_text):
+                    known.append(by_id[mention.product_id])
+                elif mention.product_text:
+                    texts.append(mention.product_text)
+        for text in texts:
+            sized = sized_products(products, text)
+            if sized:
+                known.extend(sized)  # "а большие есть?" — the large ones, not "большие у нас нет"
+                continue
+            match = matcher.match(text)
+            if match.status == MatchStatus.NONE:
+                if not is_general_mention(text):
+                    unknown.append(text)
+                continue
+            if match.generic and len(match.candidates) >= len(by_id):
+                continue  # "синнамоны", "коробка": the whole list answers it
+            known.extend(by_id[candidate] for candidate in match.candidates if candidate in by_id)
+        question = result.intent in (Intent.PRODUCT_QUERY, Intent.OTHER, Intent.FAQ, Intent.GREETING)
+        if not texts and not known and question:
+            # The model recorded nothing: "ман калонашро мепурсам" still asks for the large ones, and
+            # "а пирожки вы печёте?" still names a food we do not make.
+            known = sized_products(products, turn.text)
+            if not known:
+                unknown = off_catalog_mentions(turn.text, matcher)
+        known, unknown = list(dict.fromkeys(known)), _unique_words([word.lower() for word in unknown])
+        turn.asked = (result, known, unknown)
+        return known, unknown
+
+    def _faq_first(self, turn: _Turn, result: UnderstandingResult, intent: Intent | None = None) -> list[FaqItem]:
         """A question the FAQ answers is answered from the FAQ, whatever intent the model chose.
 
         "Насколько свежие торты?" often comes back as PRODUCT_QUERY (the catalog would be listed) or
@@ -710,13 +1016,22 @@ class DialogService:
         without a named product and OTHER. FAQ / delivery / payment intents keep their own handlers.
 
         The keywords must not take a question away from the catalog: "какие у вас есть в наличии?"
-        asks what the flavours are, not whether there is any left today (dialog #42, 21.09.2026).
+        asks what the flavours are, not whether there is any left today (dialog #42, 21.09.2026),
+        and "цена за шт?" asks the price — the entry "по одной не продаём" goes under the prices,
+        it does not replace them (audit 23.09.2026). Neither does a product the question names.
         """
-        intent = result.intent
+        intent = intent or result.intent
         if intent not in (Intent.PRODUCT_QUERY, Intent.OTHER, Intent.GREETING):
             return []
-        if intent == Intent.PRODUCT_QUERY and (result.product_ids_asked or result.entities.items):
-            return []
+        if intent == Intent.PRODUCT_QUERY and (
+            result.product_ids_asked
+            or result.entities.items
+            or _price_question(turn.text)
+            or sized_products(self._catalog(turn), turn.text)
+        ):
+            return []  # a named product, a price or a size: the catalog answers, the FAQ goes under it
+        if self._asked_products(turn, result)[1]:
+            return []  # "а пирожки свежие?" — first of all, there are no pirozhki
         items = self._faq_items(result, turn.text, keywords=intent != Intent.GREETING)
         if result.faq_ids or intent != Intent.PRODUCT_QUERY or not _asks_which(turn.text):
             return items  # the model picked these itself, or nothing asks for the assortment
@@ -736,27 +1051,16 @@ class DialogService:
         products = self._catalog(turn)
         if not products:
             return self._need_manager(turn, language)
-        by_id = {product.id: product for product in products}
-        asked = [by_id[product_id] for product_id in result.product_ids_asked if product_id in by_id]
-        unknown: list[str] = []
-        if not asked:
-            matcher = ProductMatcher(products)
-            for mention in result.entities.items:
-                if mention.product_id in by_id:
-                    asked.append(by_id[mention.product_id])
-                    continue
-                match = matcher.match(mention.product_text)
-                if match.status == MatchStatus.NONE:
-                    if mention.product_text and not is_generic_mention(mention.product_text):
-                        unknown.append(mention.product_text)
-                    continue
-                asked.extend(by_id[candidate] for candidate in match.candidates if candidate in by_id)
-        asked = list(dict.fromkeys(asked))
+        asked, unknown = self._asked_products(turn, result)
         facts, fields = self._reminder(turn)
         if unknown and not asked:
+            # "А пирожки вы печёте?" — no, and here is what we do make (dialog #155, 23.09.2026). The
+            # price list photo is not sent: nobody asked for the prices.
             facts.update({"unknown_products": unknown, "available_products": [_product_fact(p) for p in products]})
             return self._finish(turn, ReplyPlan(ReplyKind.UNKNOWN_PRODUCT, language, facts, fields))
         facts.update({"products": [_product_fact(p) for p in (asked or products)], "asked_specific": bool(asked)})
+        if unknown:
+            facts["unknown_products"] = unknown  # "круассаны есть? а фисташковый сколько?"
         if not asked and self._price_list_photo(turn):
             # The whole assortment was asked about and the owner keeps a photo of the price list
             # (03 §1.4): it goes instead of the twelve lines, with a short caption under it.
@@ -801,14 +1105,36 @@ class DialogService:
         faq = [_faq_fact(item, language) for item in self._faq_items(result, turn.text)]
         if not any(info.values()) and not faq:
             return self._need_manager(turn, language)
+        if language == "tg" and faq:
+            # The settings texts are Russian only; the FAQ answers exist in Tajik. A Tajik customer
+            # got the Russian delivery text under a Tajik reply (archive replay, 23.09.2026).
+            info = dict.fromkeys(info)
         facts, fields = self._reminder(turn)
         facts.update({**info, "faq": faq})
         return self._finish(turn, ReplyPlan(ReplyKind.DELIVERY_INFO, language, facts, fields))
 
+    def _confirmed_faq_ids(self, result: UnderstandingResult, text: str) -> list[int]:
+        """The model's FAQ ids that one of the entry's own keywords also finds in the message."""
+        padded = f" {normalize_fold(text)} "
+        by_id = {item.id: item for item in self.faq.list()}
+        return [
+            faq_id
+            for faq_id in result.faq_ids
+            if faq_id in by_id
+            and any((key := normalize_fold(word)) and f" {key} " in padded for word in by_id[faq_id].keywords or [])
+        ]
+
+    def _payment_off(self, turn: _Turn) -> bool:
+        """No payment policy to quote: no payment text in the settings and the prepayment switched off."""
+        return not turn.business.payment_methods_text.strip() and self._prepayment(turn) is None
+
     def _payment_query(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
         methods = turn.business.payment_methods_text.strip() or None
-        faq = [_faq_fact(item, language) for item in self._faq_items(result, turn.text)]
         prepayment = self._prepayment(turn)
+        # With payment switched off only the owner's own keywords may bring an FAQ answer: the model's
+        # choice then is the nearest entry it can find, which is about something else (03 §3).
+        chosen = result.model_copy(update={"faq_ids": []}) if methods is None and prepayment is None else result
+        faq = [_faq_fact(item, language) for item in self._faq_items(chosen, turn.text)]
         if methods is None and not faq and prepayment is None:
             return self._need_manager(turn, language)
         facts, fields = self._reminder(turn)
@@ -994,22 +1320,37 @@ class DialogService:
         turn.actions.append("needs_manager")
         return self._finish(turn, ReplyPlan(ReplyKind.NEED_MANAGER, language))
 
-    def _faq_items(self, result: UnderstandingResult, text: str, *, keywords: bool = True) -> list[FaqItem]:
-        """FAQ entries chosen by the model (ids validated), else by the admin's keywords."""
+    def _faq_items(
+        self, result: UnderstandingResult, text: str, *, keywords: bool | str = True
+    ) -> list[FaqItem]:
+        """FAQ entries chosen by the model (ids validated), else by the admin's keywords.
+
+        Next to the model's choice, an entry named by one of the owner's multi-word phrases is added
+        too: "сможете сегодня", "на сегодня" say exactly what they ask. "Во сколько сможете сегодня
+        доставить?" got only the delivery-time answer and never heard that today is impossible
+        (archive replay, 23.09.2026). A single keyword ("крем", "фото") is too broad for that.
+        ``keywords="phrases"`` — the model's choice plus those phrases only, never a single word.
+        """
         active = self.faq.list()
         by_id = {item.id: item for item in active}
         chosen = [by_id[faq_id] for faq_id in result.faq_ids if faq_id in by_id]
-        if chosen or not keywords:
+        if not keywords:
             return chosen
         padded = f" {normalize_fold(text)} "
-        return [
-            item
-            for item in active
-            if any((key := normalize_fold(keyword)) and f" {key} " in padded for keyword in item.keywords or [])
-        ]
+        matched: list[tuple[FaqItem, bool]] = []
+        for item in active:
+            keys = [key for keyword in item.keywords or [] if (key := normalize_fold(keyword)) and f" {key} " in padded]
+            if keys:
+                matched.append((item, any(len(key.split()) > 1 for key in keys)))
+        if not chosen and keywords != "phrases":
+            return [item for item, _ in matched]
+        extra = [item for item, phrase in matched if phrase and item not in chosen]
+        return (chosen + extra)[:MAX_FAQ_ANSWERS]
 
     def _reminder(self, turn: _Turn) -> tuple[dict[str, Any], list[str]]:
         """An open draft keeps being asked about while the customer asks something else."""
+        if turn.assist:
+            return {}, []  # the order is the manager's now
         order = self._draft(turn)
         if order is None:
             return {}, []
@@ -1125,6 +1466,10 @@ class DialogService:
 
     def _apply_items(self, turn: _Turn, order: Order, entities: Entities) -> None:
         mentions = entities.items
+        if not mentions and _open_generic(turn.state) and is_mix_mention(turn.text):
+            # The model read "все разные" as no item at all (audit 23.09.2026): it is the answer to
+            # the open "какие именно?" all the same.
+            mentions = [ItemMention(product_text=turn.text)]
         if not mentions:
             return
         state = turn.state
@@ -1153,6 +1498,12 @@ class DialogService:
                     product = by_id.get(match.product_id)
                 elif (mix := _mix_items(text, mention, state, products, position)) is not None:
                     resolved.extend(mix)
+                    continue
+                elif is_mix_mention(text) and mention.quantity is None and (open_ := _open_generic(state)):
+                    # "Хочу 4 синнамона" → "какие именно?" → "все разные": the answer to the question
+                    # already open, which 4 on 6 flavours cannot fill evenly — so the question becomes
+                    # "which 4, or 6 — one of each?", never the same "какие именно?" again.
+                    open_["mix"] = True
                     continue
                 elif match.status == MatchStatus.MULTIPLE:
                     new_pending.append(
@@ -1390,8 +1741,14 @@ class DialogService:
         payment settings) instead of being dropped for the next question. No data → the manager is
         alerted (SPEC §40) and the reply says so; the order goes on either way."""
         intents = set(result.all_intents)
-        asked_faq = self._faq_items(result, turn.text, keywords=Intent.FAQ in intents)
-        if not asked_faq and not intents & {Intent.FAQ, Intent.DELIVERY_QUERY, Intent.PAYMENT_QUERY}:
+        # "Можно подписать открытку? Хочу 6 шт…": the owner's exact phrase finds the answer even when
+        # the model saw only the order (audit 23.09.2026); a single keyword only with an FAQ intent.
+        asked_faq = self._faq_items(result, turn.text, keywords=True if Intent.FAQ in intents else "phrases")
+        # "4 классических и пирожки есть?" — a food we do not make, asked on the way (03 §1.4).
+        noted = {word.casefold() for word in turn.notes.get("unknown_products") or []}
+        unknown = [word for word in self._asked_products(turn, result)[1] if word.casefold() not in noted]
+        queries = intents & {Intent.FAQ, Intent.DELIVERY_QUERY, Intent.PAYMENT_QUERY}
+        if not asked_faq and not queries and not unknown:
             return
         answers: dict[str, Any] = {}
         if asked_faq:
@@ -1405,10 +1762,12 @@ class DialogService:
             answers["payment_methods"] = business.payment_methods_text.strip() or None
             answers["prepayment"] = self._prepayment(turn)
         answers = {key: value for key, value in answers.items() if value}
-        if not answers:
-            answers = {"need_manager": True}
+        if (asked_faq or queries) and not answers:
+            answers = {"need_manager": "payment" if queries == {Intent.PAYMENT_QUERY} else True}
             turn.conversation.needs_attention = True
             turn.actions.append("needs_manager")
+        if unknown:
+            answers["unknown_products"] = unknown
         turn.notes[ANSWERS_FACT] = answers
 
     def _note_timing(self, turn: _Turn, problem: str, problem_date: date | None = None) -> None:
@@ -1459,6 +1818,18 @@ class DialogService:
         delivery = order.delivery
         if delivery is None or not (delivery.address_raw or "").strip():
             return None
+        town = _other_town(delivery.address_raw)
+        if town is not None:
+            # "Душанбе, Рудаки 45" must not be looked up in Khujand, where a Rudaki 45 exists too: the
+            # courier would drive to the wrong city. Delivery out of town is by arrangement (FAQ
+            # «Доставляете ли за город?»), so the manager confirms it; the customer can still pin it.
+            turn.notes["out_of_town"] = town
+            turn.conversation.needs_attention = True
+            turn.actions.append("out_of_town")
+            # Looked at, not found in our city: the order may go on without the point (03 §7), and
+            # the operator sees the delivery without coordinates.
+            delivery.geocode_status = GeocodeStatus.NOT_FOUND
+            return self._address_clarify(turn, order, language)
         GeocodingService(self.db, geocoder=self._geocoder, settings=self.settings).geocode_delivery(delivery)
         if delivery.has_coordinates and delivery.geocode_status in USABLE_GEOCODE_STATUSES:
             turn.state.address_candidates = []
@@ -1490,6 +1861,7 @@ class DialogService:
             "link": self._location_link(delivery) if delivery is not None else None,
             "status": delivery.geocode_status.value if delivery is not None else None,
             "then_summary": not fields,
+            "out_of_town": turn.notes.get("out_of_town"),
             **self._answer_facts(turn),
         }
         turn.actions.append("address_clarify")
@@ -1657,6 +2029,70 @@ class DialogService:
             **self._answer_facts(turn),
         }
 
+    def _side_answers(self, turn: _Turn, plan: ReplyPlan) -> dict[str, Any]:
+        """The other questions of the message, answered under the main answer (fact ``answers``).
+
+        "Сколько стоит коробка и есть ли доставка?", "Трайфл и круассаны есть? И можно у вас
+        посидеть?" — each part is answered from the data (FAQ entries the model chose, delivery and
+        payment settings, the foods we do not make) instead of the reply covering the first question
+        only (audit 23.09.2026). A part without data adds "уточню у менеджера" and alerts the manager.
+        """
+        result = turn.result
+        covered = _SIDE_COVERED.get(plan.kind)
+        if result is None or covered is None or ANSWERS_FACT in plan.facts:
+            return {}
+        intents = set(result.all_intents) - covered
+        answers: dict[str, Any] = {}
+        if plan.kind not in (ReplyKind.PRODUCT_INFO, ReplyKind.UNKNOWN_PRODUCT):
+            unknown = self._asked_products(turn, result)[1]
+            if unknown:
+                answers["unknown_products"] = unknown
+                answers["available_products"] = [_product_fact(product) for product in self._catalog(turn)]
+        if not plan.facts.get("faq"):
+            asked_faq = self._faq_items(result, turn.text, keywords="phrases")
+            if asked_faq:
+                answers["faq"] = [_faq_fact(item, plan.language) for item in asked_faq]
+        business = turn.business
+        unanswered: list[str] = []
+        if Intent.DELIVERY_QUERY in intents and "faq" not in answers:
+            delivery = {
+                "delivery_info": business.delivery_info_text.strip() or None,
+                "pickup_address": business.pickup_address.strip() or None,
+                "working_hours": business.working_hours.strip() or None,
+            }
+            topic = self._topic_faq(turn, "доставк") if plan.language == "tg" else None
+            if topic is not None:
+                # The settings texts are Russian only; the owner's delivery answer exists in Tajik.
+                answers["faq"] = [_faq_fact(topic, plan.language)]
+            else:
+                answers.update({key: value for key, value in delivery.items() if value})
+                if not any(delivery.values()):
+                    unanswered.append("delivery")
+        payment_asked = Intent.PAYMENT_QUERY in intents or (
+            plan.kind != ReplyKind.PAYMENT_INFO and _payment_topic(turn.text)
+        )
+        if payment_asked and "faq" not in answers:
+            payment = {
+                "payment_methods": business.payment_methods_text.strip() or None,
+                "prepayment": self._prepayment(turn),
+            }
+            answers.update({key: value for key, value in payment.items() if value})
+            if not any(payment.values()):
+                unanswered.append("payment")
+        if unanswered and plan.kind != ReplyKind.NEED_MANAGER:
+            # "Про оплату уточню у менеджера": the customer knows which of the questions waits.
+            answers["need_manager"] = unanswered[0] if len(unanswered) == 1 else True
+            turn.conversation.needs_attention = True
+            turn.actions.append("needs_manager")
+        return answers
+
+    def _topic_faq(self, turn: _Turn, stem: str) -> FaqItem | None:
+        """The owner's first FAQ entry about a topic ("доставк") that has a Tajik answer."""
+        return next(
+            (item for item in self.faq.list() if stem in normalize_fold(item.question) and item.answer_tg),
+            None,
+        )
+
     @staticmethod
     def _answer_facts(turn: _Turn) -> dict[str, Any]:
         """The ``answers`` fact (``_note_answers``) for replies whose facts are not ``turn.notes``."""
@@ -1696,6 +2132,11 @@ class DialogService:
                 }
                 for entry in turn.state.pending_items
             ]
+            if any(entry.get("mix") and entry.get("quantity") for entry in turn.state.pending_items):
+                # "Или возьмём 6 — по одному каждого?" only when that total fits the packing rule.
+                flavours = len(flavour_bases(self._catalog(turn)))
+                if flavours > 1 and quantity_problem(flavours, turn.business) is None:
+                    facts["mix_full"] = flavours
         facts["order_so_far"] = {
             "items": [
                 {
@@ -1788,20 +2229,25 @@ class DialogService:
         turn.history = history[-HISTORY_LIMIT:]
         return turn.history
 
-    def _repeats_last_reply(self, turn: _Turn, text: str) -> bool:
-        """Would this reply repeat the bot's previous one word for word?
+    def _repeats_last_reply(self, turn: _Turn, text: str, depth: int = 1) -> bool:
+        """Would this reply repeat one of the bot's last ``depth`` replies word for word?
 
         Sending the same paragraph twice is the shape "the bot is stuck" takes: the customer
         rephrases, a template comes back unchanged, and nothing moves. Whitespace and case do not
         make two answers different, and an empty text is not a repeat. Only a reply to the
         customer's own message counts — re-showing the summary after a map pin is not a repeat.
+        ``depth=2`` catches a bot swinging between two sentences ("уточню у менеджера" / "этот
+        вопрос тоже передали менеджеру").
         """
         if turn.message is None:
             return False  # a continuation the system started (a map pin, a receipt), not a re-ask
-        previous = next((entry for entry in reversed(self._history(turn)) if entry["role"] != "customer"), None)
-        if previous is None or previous["role"] == "operator":
+        replies = [entry for entry in reversed(self._history(turn)) if entry["role"] != "customer"][:depth]
+        if not replies or replies[0]["role"] == "operator":
             return False
-        return bool(_squeeze(text)) and _squeeze(text) == _squeeze(previous["text"])
+        squeezed = _squeeze(text)
+        return bool(squeezed) and any(
+            squeezed == _squeeze(entry["text"]) for entry in replies if entry["role"] == "assistant"
+        )
 
     def _reply_context(self, turn: _Turn) -> dict[str, Any]:
         """Wording context for the reply step (05 §6): the customer's words and the recent turns —
@@ -1827,9 +2273,33 @@ class DialogService:
         """03 §6: HUMAN_HANDOFF + one message on the customer's language."""
         turn.tools.request_operator(reason)
         turn.actions.append("handoff")
+        if turn.assist:
+            # Already waiting for the manager: the new reason is recorded (a request for a person
+            # or a complaint ends the bot's answers for good), and "передаю менеджеру" is not said twice.
+            return self._assist_silent(turn)
         turn.image = None  # a picture belongs to an answer, not to "передаю менеджеру"
         plan = ReplyPlan(ReplyKind.HANDOFF, language, {"reason_code": reason_code, **(facts or {})})
         return self._finish(turn, plan, handoff=True, reset_attempts=reset_attempts)
+
+    def _keep_offered_slot(self, turn: _Turn) -> None:
+        """The offered earliest slot stays open while the draft still has no time and no other day,
+        and the customer has only been giving order data since: then a later "да" / "давайте" still
+        means that slot (audit 23.09.2026 — the phone came in between, the offer was forgotten, and
+        "да" repeated the question until the handoff). A question or anything else in between ends
+        it: "а доставка есть?" → "да" is not an answer about the time."""
+        slot = turn.state.offered_slot
+        if slot is None:
+            return
+        order = self._draft(turn)
+        carried_over = slot == turn.offer_at_start
+        data_only = turn.result is not None and turn.result.intent in ORDER_INTENTS
+        if (
+            order is None
+            or order.delivery_time is not None
+            or (order.delivery_date is not None and order.delivery_date.isoformat() != slot["date"])
+            or (carried_over and not data_only)
+        ):
+            turn.state.offered_slot = None
 
     def _finish(
         self,
@@ -1840,13 +2310,18 @@ class DialogService:
         reset_attempts: bool = True,
     ) -> DialogOutcome:
         conversation = turn.conversation
+        if turn.assist and not handoff and plan.kind not in ASSIST_KINDS:
+            return self._assist_silent(turn)
         if reset_attempts:
             conversation.failed_ai_attempts = 0
         if plan.kind not in (ReplyKind.GREETING, ReplyKind.BLOCKED) and "greeting" not in plan.facts:
             greeting = detect_greeting(turn.text)
-            if greeting is not None:
+            if greeting is not None and not turn.assist:
                 # "Здравствуйте, хочу 2 коробки": the greeting is answered in kind before the reply itself.
                 plan = replace(plan, facts={**plan.facts, "greeting": greeting.value})
+        side = self._side_answers(turn, plan)
+        if side:
+            plan = replace(plan, facts={**plan.facts, ANSWERS_FACT: side})
         template_only = uses_template(plan)
         if not template_only and not plan.context:
             plan = replace(plan, context=self._reply_context(turn))
@@ -1856,19 +2331,21 @@ class DialogService:
         if turn.image:
             # Remembered only once the picture really goes with this reply (a handoff drops it).
             turn.state.price_list_sent = turn.image
+        self._keep_offered_slot(turn)
         conversation.state = turn.state.to_json()
         if turn.message is not None and not turn.message.ai_processed:
             turn.message.ai_processed = True
         self.db.commit()
 
-        wording = not template_only and self.settings.LLM_REPLY_WORDING_ENABLED
+        wording = not template_only and self.settings.LLM_REPLY_WORDING_ENABLED and not turn.no_model
         llm = self.llm if wording else None
         reply = Responder(
             llm,
             catalog_names=[product.name for product in self._catalog(turn)],
             allow_same_day=turn.business.min_lead_time_hours <= 0,
         ).generate_reply(plan)
-        if not handoff and self._repeats_last_reply(turn, reply.text):
+        depth = 2 if plan.kind in (ReplyKind.NEED_MANAGER, ReplyKind.UNKNOWN_PRODUCT) else 1
+        if not handoff and self._repeats_last_reply(turn, reply.text, depth):
             # The customer asked again and would get the same words back: the bot has nothing to add,
             # so a person takes over instead of repeating itself (dialog #42, 21.09.2026).
             log_event(
@@ -1878,7 +2355,16 @@ class DialogService:
                 message_id=turn.message.id if turn.message is not None else None,
                 kind=plan.kind.value,
             )
-            return self._handoff(turn, REASON_REPEATED_REPLY, "repeated_reply", plan.language)
+            if turn.assist:
+                return self._assist_silent(turn)
+            if plan.kind in AGAIN_KINDS and not plan.facts.get("again"):
+                # Not a stuck bot: a second "уточню у менеджера" (the manager is already alerted),
+                # "алло" twice, "пирожков нет" asked again. Said in other words, and the dialog stays
+                # with the bot — two such questions in a row used to silence it (dialog #3, 23.09.2026).
+                again = replace(plan, facts={**plan.facts, "again": True})
+                return self._finish(turn, again, reset_attempts=reset_attempts)
+            if plan.kind not in (ReplyKind.GREETING, ReplyKind.SMALL_TALK):
+                return self._handoff(turn, REASON_REPEATED_REPLY, "repeated_reply", plan.language)
         log_event(
             logger,
             "dialog.reply",
@@ -1907,6 +2393,39 @@ def _asks_which(text: str) -> bool:
     """"Какие у вас есть?", "кадом намудаш ҳаст?" — the catalog answers this, not the FAQ."""
     padded = f" {normalize_fold(text)} "
     return any(f" {word} " in padded for word in WHICH_WORDS)
+
+
+#: Words that make a "какие…?" a question about the assortment: "какие вкусы?", "что есть?", "кадом намуд?".
+_ASSORTMENT_RE = re.compile(
+    r"\b(?:вкус\w*|вид\w*|есть|ассортимент\w*|синнамон\w*|синамон\w*|булочк\w*|намуд\w*|хаст\w*|доред|бор)\b"
+)
+
+_PAYMENT_RE = re.compile(
+    r"\b(?:предоплат\w*|оплат\w*|оплачу|оплачивать|заплат\w*|наличн\w*|наличк\w*|перевод\w*|переведу|перевести|"
+    r"картой|карточк\w*|пардохт\w*|пешпардохт\w*|накд|алиф\w*|эсхат\w*|аванс\w*|задат\w*)\b"
+)
+
+
+def _payment_topic(text: str) -> bool:
+    """"Предоплата нужна?", "можно наличными?", "переводом можно?", "пардохт" — a payment question."""
+    return _PAYMENT_RE.search(normalize_fold(text)) is not None
+
+
+def _price_question(text: str) -> bool:
+    """"Сколько стоит?", "цена за шт?", "нархаш чанд?" — the message asks the price (``_PRICE_RE``)."""
+    return _PRICE_RE.search(normalize_fold(text)) is not None
+
+
+def _unique_words(words: list[str]) -> list[str]:
+    """The customer's words once each, case aside, in the order they came."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for word in words:
+        key = " ".join(word.casefold().split())
+        if key and key not in seen:
+            seen.add(key)
+            result.append(word)
+    return result
 
 
 def _matched_stock_words_only(item: FaqItem, text: str) -> bool:
@@ -1981,6 +2500,14 @@ def _pending_total(state: DialogState) -> int | None:
     return None
 
 
+def _open_generic(state: DialogState) -> dict[str, Any] | None:
+    """The "какие именно?" still waiting for flavours with a count ("4 синнамона"), if any."""
+    for entry in reversed(state.pending_items):
+        if entry["kind"] == PENDING_GENERIC and entry.get("quantity"):
+            return entry
+    return None
+
+
 def _mix_items(
     text: str, mention: Any, state: DialogState, products: list[Product], position: int
 ) -> list[dict[str, Any]] | None:
@@ -1996,7 +2523,8 @@ def _mix_items(
     if not is_mix_mention(text):
         return None
     flavours = flavour_bases(products)
-    total = mention.quantity or _pending_total(state)
+    # "по одному каждого" names the count itself: as many as there are flavours
+    total = len(flavours) if _ONE_OF_EACH_RE.search(normalize_fold(text)) else mention.quantity or _pending_total(state)
     if len(flavours) < 2 or not total or total % len(flavours):
         return None
     each = total // len(flavours)
@@ -2054,6 +2582,65 @@ def _distribute_quantities(choice_pending: list[dict[str, Any]], resolved: list[
     elif remaining == len(unspecified):
         for entry in unspecified:
             entry["quantity"] = 1
+
+
+#: Towns and cities other than Khujand, as customers write them in an address (folded). The suburbs
+#: of the FAQ («Гафуров, Бустон, Гулистон») are out of town too: delivery there is by arrangement.
+_OTHER_TOWNS = (
+    "душанбе",
+    "бохтар",
+    "куляб",
+    "кулоб",
+    "истаравшан",
+    "ура тюбе",
+    "пенджикент",
+    "панджакент",
+    "исфара",
+    "канибадам",
+    "конибодом",
+    "турсунзаде",
+    "вахдат",
+    "гиссар",
+    "хисор",
+    "рогун",
+    "нурек",
+    "хорог",
+    "бустон",
+    "чкаловск",
+    "гафуров",
+    "гулистон",
+    "кайраккум",
+    "шахристан",
+    "зафарабад",
+    "спитамен",
+    "ташкент",
+    "самарканд",
+)
+
+
+#: A word before a town's name that makes it a street of Khujand: "ул. Б. Гафурова", "кучаи Исфара".
+_STREET_MARKERS = frozenset(
+    {"ул", "улица", "улице", "кучаи", "куча", "проспект", "пр", "им", "имени", "пр-т", "проезд"}
+)
+
+
+def _other_town(address: str | None) -> str | None:
+    """The other town an address names ("Душанбе, Рудаки 45" → "Душанбе"), or ``None`` for Khujand.
+
+    A town name used as a street name is Khujand ("ул. Б. Гафурова 12"): after a street word or an
+    initial it does not count.
+    """
+    words = re.findall(r"[^\W\d_]+", str(address or ""))
+    folded = [normalize_fold(word) for word in words]
+    joined = " ".join(folded)
+    for town in _OTHER_TOWNS:
+        for match in re.finditer(rf"\b{town}\w*", joined):
+            start = len(joined[: match.start()].split())
+            previous = folded[start - 1] if start > 0 else ""
+            if previous in _STREET_MARKERS or (len(previous) == 1 and previous != "г"):
+                continue  # "ул. Б. Гафурова" is a street here; "г. Душанбе" is the city
+            return words[start].capitalize() if start < len(words) else town.capitalize()
+    return None
 
 
 _COUNTRY_NAMES = frozenset({"таджикистан", "тоҷикистон", "tajikistan"})

@@ -68,7 +68,8 @@ _TODAY_PROMISE_RES = (
     re.compile(r"\b(?:имруз|хозир)\b[^.!?]{0,40}?\b(?:мефиристем|мефиристам|меорем|мерасонем|тайер|тайёр)"),
 )
 #: Words that turn such a sentence into a refusal instead of a promise.
-_NEGATIONS = (" не ", " нельзя", " никак", " наме", " нест")
+#: "Сейчас веганских вариантов нет" is a refusal too (audit 23.09.2026).
+_NEGATIONS = (" не ", " нельзя", " никак", " наме", " нест", " нет ")
 
 #: Claims the bot must never invent (SPEC §40: наличие, скидки, обещания).
 DEFAULT_FORBIDDEN_PHRASES = (
@@ -204,7 +205,8 @@ class ResponseGuard:
 
         violations.extend(self._check_amounts(folded, allowed_amounts))
         violations.extend(self._check_confirmation(normalized, kind))
-        violations.extend(self._check_same_day(normalized))
+        allowed_phrases = list(allowed_phrases)
+        violations.extend(self._check_same_day(normalized, allowed_phrases))
         violations.extend(self._check_forbidden(normalized, allowed_phrases))
         violations.extend(self._check_products(normalized, allowed_product_names))
         if _FOREIGN_SCRIPT_RE.search(str(text)):
@@ -251,15 +253,24 @@ class ResponseGuard:
                 violations.append(f"confirmation_claim:{match.group(0)}")
         return violations
 
-    def _check_same_day(self, normalized: str) -> list[str]:
-        """A promise to bake, send or deliver today, which only the owner may make (see above)."""
+    def _check_same_day(self, normalized: str, allowed_phrases: Iterable[str] = ()) -> list[str]:
+        """A promise to bake, send or deliver today, which only the owner may make (see above).
+
+        The owner's own words are not the model's promise: "Напишете сегодня до 18:00 — завтра всё
+        будет готово" is an FAQ answer, and repeating it must not throw the reply away (the audit
+        of 23.09.2026 found it rejected in live dialogs #74 and #104).
+        """
         if self._allow_same_day:
             return []
+        facts = " ".join(f" {normalize_fold(phrase)} " for phrase in allowed_phrases)
         violations: list[str] = []
         for pattern in _TODAY_PROMISE_RES:
             match = pattern.search(normalized)
-            if match and not any(word in f" {match.group(0)} " for word in _NEGATIONS):
-                violations.append(f"same_day_promise:{match.group(0)}")
+            if not match or any(word in f" {match.group(0)} " for word in _NEGATIONS):
+                continue
+            if match.group(0) in facts:
+                continue
+            violations.append(f"same_day_promise:{match.group(0)}")
         return violations
 
     def _check_forbidden(self, normalized: str, allowed_phrases: Iterable[str]) -> list[str]:

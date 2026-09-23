@@ -37,11 +37,15 @@ __all__ = [
     "CATEGORY_STEMS",
     "DESCRIPTOR_STEMS",
     "FUZZY_THRESHOLD",
+    "GENERAL_STEMS",
+    "OTHER_FOOD_STEMS",
     "MatchResult",
     "MatchStatus",
     "ProductMatcher",
+    "is_general_mention",
     "is_generic_mention",
     "is_mix_mention",
+    "off_catalog_mentions",
     "split_item_mentions",
 ]
 
@@ -140,6 +144,81 @@ DESCRIPTOR_STEMS = (
     "маза",
     "мазза",
 )
+#: Words that describe any bakery's assortment as a whole: "а какие десерты есть?", "что из выпечки?",
+#: "вкусняшки", "ширинӣ". They name what we sell, whatever the catalog is called — never "такого нет".
+GENERAL_STEMS = (
+    "десерт",
+    "выпечк",
+    "сладост",
+    "сладк",
+    "ширин",
+    "вкусняш",
+    "вкусност",
+    "продукц",
+    "ассортимент",
+    "товар",
+    "меню",
+    "позици",
+    "изделия",
+)
+#: Other baked goods, desserts and dishes a customer may ask a bakery about ("а пирожки вы печёте?",
+#: "торты есть?", "самса ҳаст?"). A word here is only a candidate: ``ProductMatcher`` looks at the
+#: catalog first, so a shop that does sell cakes answers "торт" with its cakes, and only what the
+#: catalog really lacks is answered "такого у нас нет" (dialog #155, 23.09.2026). "Рулет" and
+#: "шоколадка" are deliberately absent: customers use them for the rolls and the chocolate ones.
+OTHER_FOOD_STEMS = (
+    "пирож",
+    "пирог",
+    "торт",
+    "хлеб",
+    "батон",
+    "лепеш",
+    "лаваш",
+    "самс",
+    "самбус",
+    "круасс",
+    "пицц",
+    "печень",
+    "пончик",
+    "донат",
+    "эклер",
+    "кекс",
+    "маффин",
+    "капкейк",
+    "чизкейк",
+    "медовик",
+    "наполеон",
+    "тирамису",
+    "трайфл",
+    "макарон",
+    "брауни",
+    "вафл",
+    "оладь",
+    "сырник",
+    "пахлав",
+    "чакчак",
+    "халв",
+    "морожен",
+    "конфет",
+    "штрудел",
+    "бисквит",
+    "безе",
+    "зефир",
+    "мармелад",
+    "бургер",
+    "шаурм",
+    "сэндвич",
+    "бутерброд",
+    "салат",
+    "плов",
+    "манты",
+    "пельмен",
+    "шашлык",
+    "кулча",
+)
+#: Short words that are only foods as whole tokens ("нон" is bread in Tajik). Pancakes are listed by
+#: form: "блин" on its own is what people say when they drop something.
+_OTHER_FOOD_WORDS = frozenset({"нон", "нони", "суп", "супы", "торти", "блины", "блинчики", "блинчик", "блинов"})
 #: A packaging word asks for the products sold in it: "2 коробки" → every product with the unit "кор.".
 #: When nothing is sold by that unit — a catalog priced per piece — the word still names no flavour,
 #: so :meth:`ProductMatcher._match_category` offers the whole catalog instead of answering "нет такого".
@@ -172,6 +251,10 @@ _MENTION_STOPWORDS = frozenset(
         "есть",
         "какие",
         "какой",
+        "что",
+        "а",
+        "у",
+        "вас",
         "штук",
         "штуки",
         "шт",
@@ -253,22 +336,67 @@ def is_generic_mention(text: str | None) -> bool:
     return bool(tokens) and all(token.startswith(CATEGORY_STEMS + DESCRIPTOR_STEMS) for token in tokens)
 
 
+def is_general_mention(text: str | None) -> bool:
+    """True for words that describe the assortment as a whole or the shape of the order: "десерты",
+    "выпечка", "вкусняшки", "коробка", "микс". Such a text is never "такого у нас нет", even when no
+    product name contains it."""
+    tokens = _content_tokens(text)
+    stems = GENERAL_STEMS + DESCRIPTOR_STEMS + tuple(PACKAGING_UNITS)
+    return bool(tokens) and all(token.startswith(stems) for token in tokens)
+
+
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def off_catalog_mentions(text: str | None, matcher: "ProductMatcher") -> list[str]:
+    """The foods a message names that the catalog does not have: "а пирожки вы печёте?" → ["пирожки"].
+
+    Only words of :data:`OTHER_FOOD_STEMS` count, and only when ``matcher`` finds nothing for them —
+    the deterministic half of ``products_asked_text`` (05 §3), for when the model leaves it empty.
+    """
+    found: list[str] = []
+    for raw in _WORD_RE.findall(str(text or "")):
+        token = normalize_fold(raw)
+        if not (token.startswith(OTHER_FOOD_STEMS) or token in _OTHER_FOOD_WORDS):
+            continue
+        if matcher.match(token):
+            continue  # the catalog has it
+        word = raw.lower()
+        if word not in found:
+            found.append(word)
+    return found
+
+
 #: One word is enough for a mix; "все"/"разные" need the thing they are all of ("все вкусы").
 _MIX_STEMS = ("микс", "ассорт", "омехта", "гуногун", "хархел")
+#: "Разные", "любые" — alone they say the same: the flavours are up to us, one of each.
+_MIX_ANY = ("разн", "любы")
+_MIX_FILLERS = frozenset({"пусть", "будут", "давайте", "давай", "тогда", "ну", "по", "штук", "шт", "хорошо", "ок"})
 _MIX_ALL = ("все", "вся", "разн", "любы", "любо", "хама")
 _MIX_OF = ("вкус", "маза", "мазза", "синнамон", "синамон", "синнабон", "синабон", "булочк")
 
 
 def is_mix_mention(text: str | None) -> bool:
-    """True for "микс", "ассорти", "все вкусы", "разные вкусы" — one of every flavour (03 §1.3).
+    """True for "микс", "ассорти", "все вкусы", "все разные", "любые", "по одному каждого" — one of
+    every flavour (03 §1.3).
 
     The customer is not naming a product but the way the box is put together, so ``DialogService``
-    assembles it from the flavours instead of asking "какие именно?" (dialog #3, 23.09.2026).
+    assembles it from the flavours instead of asking "какие именно?" (dialog #3, 23.09.2026). "Все
+    разные" in answer to "какие именно?" is the same wish (audit 23.09.2026: the question came back
+    unchanged and the dialog went to the manager).
     """
     tokens = normalize_fold(text).split()
     if any(token.startswith(_MIX_STEMS) for token in tokens):
         return True
-    return any(token.startswith(_MIX_ALL) for token in tokens) and any(token.startswith(_MIX_OF) for token in tokens)
+    if any(token.startswith("кажд") for token in tokens) and any(token.startswith("одн") for token in tokens):
+        return True  # "по одному каждого"
+    if any(token.startswith(_MIX_OF) for token in tokens):
+        return any(token.startswith(_MIX_ALL + _MIX_ANY) for token in tokens)
+    # "все разные", "пусть будут любые": only such words — "в разные дни" is about something else
+    content = [token for token in _content_tokens(text) if token not in _MIX_FILLERS]
+    return bool(content) and any(token.startswith(_MIX_ANY) for token in content) and all(
+        token.startswith(_MIX_ALL + _MIX_ANY) for token in content
+    )
 
 
 @dataclass(frozen=True)

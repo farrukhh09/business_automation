@@ -166,6 +166,14 @@ _TEXTS: dict[str, dict[str, str]] = {
         "handoff_complaint": "Извините за неудобства.",
         "handoff_order_locked": "Заказ №{order_id} уже в работе — изменения согласует менеджер.",
         "need_manager": "Мне нужно уточнить эту информацию у менеджера.",
+        "need_manager_payment": "Про оплату уточню у менеджера — он напишет здесь.",
+        "need_manager_delivery": "Про доставку уточню у менеджера — он напишет здесь.",
+        # The second "уточню у менеджера" in a row: said in other words instead of handing the whole
+        # dialog over — the customer may still ask everything else (dialog #3, 23.09.2026).
+        "need_manager_again": (
+            "Этот вопрос тоже передали менеджеру — он ответит здесь. А пока могу подсказать по вкусам, ценам "
+            "и доставке или оформить заказ 🙂"
+        ),
         "address_candidates": "Уточните, пожалуйста, адрес. Возможно, это один из вариантов:",
         "address_choose": "Напишите номер варианта или отметьте точку на карте: {link}",
         "address_choose_no_link": "Напишите номер подходящего варианта или уточните адрес.",
@@ -188,15 +196,23 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Если неудобно открывать карту, напишите «дальше» — оформим заказ по адресу как есть, "
             "а курьер уточнит по телефону."
         ),
+        "address_other_town": (
+            "Доставка в {town} — по договорённости: возможность и стоимость подтвердит менеджер."
+        ),
+        "address_town_link": " Отметьте, пожалуйста, точку на карте: {link}",
         "clarify_intro": "Уточните, пожалуйста:",
         "recorded": "Записали: {items}.",
         "pending_generic": "Подскажите, пожалуйста, какие именно? Сейчас есть: {options}.",
         "pending_mix": "Микс соберём из любых вкусов: {options}. Сколько штук нужно?",
+        "pending_mix_uneven": (
+            "{quantity} шт. на {count} вкусов поровну не делятся — напишите, какие выбрать: {options}."
+        ),
+        "pending_mix_full": " Или сделаем {count} шт. — по одному каждого?",
         "pending_generic_more": "Подскажите, пожалуйста, какие ещё {quantity} выбрать? Сейчас есть: {options}.",
         "pending_ambiguous": "Уточните, пожалуйста, какой именно товар вы имели в виду: {options}?",
         "pending_quantity": "Сколько штук нужно: {names}?",
         "pending_quantity_boxes": "Сколько коробочек нужно: {names}?",
-        "unknown_products": "К сожалению, {names} нет в нашем каталоге.",
+        "unknown_products": "К сожалению, {names} у нас нет.",
         "available_products": "Сейчас можно заказать: {names}.",
         # The catalog by flavour: both prices on one line, the sizes explained once underneath
         # (the owner, 23.09.2026 — twelve rows with a description each are a wall of text).
@@ -242,10 +258,17 @@ _TEXTS: dict[str, dict[str, str]] = {
         "small_talk_thanks": "Пожалуйста! Будем рады видеть вас снова 😊",
         "small_talk_goodbye": "Всего доброго! Пишите, если что-то понадобится.",
         "small_talk_ack": "Хорошо 👍 Если что-то понадобится — пишите.",
+        "small_talk_ping": "Да, мы здесь 😊",
+        "small_talk_ping_question": "Подскажите, что вас интересует?",
         "small_talk_chat": (
             "Мы «Синнамоны» — премиальные синнамон-роллы в Худжанде 😊 Подскажите, чем можем помочь: "
             "заказ, доставка или самовывоз?"
         ),
+        # The same small talk twice in a row: said in other words, never handed to the manager.
+        "small_talk_again": "Мы на связи 🙂 Напишите, чем помочь: подскажем по вкусам и ценам или оформим заказ.",
+        "small_talk_thanks_again": "Всегда рады 😊",
+        "greeting_question_again": "Слушаем вас 😊 Подскажите, что вас интересует?",
+        "unknown_products_again": "Да, к сожалению, {names} мы не делаем. Могу подсказать цены на то, что есть 🙂",
         "products_intro": "Вот что у нас есть:",
         # The caption under the price list photo (03 §1.4): the picture is the list, so the text
         # says only what a picture cannot — that the prices are per roll.
@@ -337,6 +360,12 @@ _TEXTS: dict[str, dict[str, str]] = {
         "handoff_complaint": "Барои нороҳатӣ мебахшед.",
         "handoff_order_locked": "Фармоиши №{order_id} аллакай дар кор аст — тағйиротро менеҷер ҳал мекунад.",
         "need_manager": "Инро аз менеҷер мепурсам ва ба шумо менависам.",
+        "need_manager_payment": "Дар бораи пардохт аз менеҷер мепурсам — ҳамин ҷо менависад.",
+        "need_manager_delivery": "Дар бораи доставка аз менеҷер мепурсам — ҳамин ҷо менависад.",
+        "need_manager_again": (
+            "Инро ҳам ба менеҷер додем — ҳамин ҷо ҷавоб медиҳад. То он вақт дар бораи таъмҳо, нарх ва доставка "
+            "гуфта метавонам ё фармоишро қабул мекунам 🙂"
+        ),
         "address_candidates": "Адресро аниқ кунед. Шояд яке аз инҳо бошад:",
         "address_choose": "Рақами вариантро нависед ё ҷои худро дар харита нишон диҳед: {link}",
         "address_choose_no_link": "Рақами варианти мувофиқро нависед ё адресро аниқтар нависед.",
@@ -361,10 +390,16 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Агар харита кушодан нокулай бошад, «давом» нависед — фармоишро бо ҳамин адрес қабул мекунем, "
             "курер бо телефон аниқ мекунад."
         ),
+        "address_other_town": "Доставка ба {town} — бо гуфтугӯ: мешавад ё не ва чанд пул, менеҷер мегӯяд.",
+        "address_town_link": " Ҷои худро дар харита нишон диҳед: {link}",
         "clarify_intro": "Илтимос, аниқ кунед:",
         "recorded": "Навиштем: {items}.",
         "pending_generic": "Кадомашро мегиред? Ҳозир дорем: {options}.",
         "pending_mix": "Миксро аз ҳар мазза ҷамъ мекунем: {options}. Чандто лозим?",
+        "pending_mix_uneven": (
+            "{quantity} дона ба {count} таъм баробар тақсим намешавад — нависед, кадомашро гирем: {options}."
+        ),
+        "pending_mix_full": " Ё {count} дона кунем — аз ҳар таъм якто?",
         "pending_generic_more": "Боз кадомашро мегиред ({quantity})? Ҳозир дорем: {options}.",
         "pending_ambiguous": "Кадомашро дар назар доред: {options}?",
         "pending_quantity": "Чандто лозим: {names}?",
@@ -408,6 +443,14 @@ _TEXTS: dict[str, dict[str, str]] = {
         "small_talk_thanks": "Саломат бошед! Боз биёед 😊",
         "small_talk_goodbye": "Хайр! Агар чизе лозим шавад, нависед.",
         "small_talk_ack": "Хуб 👍 Агар чизе лозим шавад, нависед.",
+        "small_talk_ping": "Ҳа, мо ҳастем 😊",
+        "small_talk_ping_question": "Чӣ лозим, нависед?",
+        "small_talk_again": (
+            "Мо дар алоқаем 🙂 Нависед, чӣ лозим: дар бораи таъмҳо ва нарх мегӯем ё фармоиш қабул мекунем."
+        ),
+        "small_talk_thanks_again": "Ҳамеша хурсандем 😊",
+        "greeting_question_again": "Гӯш мекунем 😊 Чӣ лозим, нависед?",
+        "unknown_products_again": "Ҳа, мебахшед, {names} тайёр намекунем. Нархи чизҳои доштаамонро гуфта метавонам 🙂",
         "small_talk_chat": (
             "Мо «Синнамоны» ҳастем — синнамон-роллҳои премиум дар Хуҷанд 😊 Чӣ лозим: фармоиш, доставка ё "
             "худатон мегиред?"
@@ -605,6 +648,13 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
             # A mix with no count: the flavours are settled ("все"), the number is what is missing.
             # Asking "какие именно?" here sends the customer round the same circle (dialog #3).
             notes.append(_t(language, "pending_mix", options=options))
+        elif kind == "generic" and options and pending.get("mix"):
+            # "4 синнамона" + "все разные": 4 on 6 flavours — which 4, or 6, one of each?
+            count = len(flavour_names(names))
+            note = _t(language, "pending_mix_uneven", quantity=quantity, count=count, options=options)
+            if _text(facts.get("mix_full")):
+                note += _t(language, "pending_mix_full", count=_text(facts.get("mix_full")))
+            notes.append(note)
         elif kind == "generic" and options and recorded and quantity:
             # "5 синнамонов, 3 ягодных": the 3 are written down — the question is about the 2 more.
             notes.append(_t(language, "pending_generic_more", quantity=quantity, options=options))
@@ -737,8 +787,15 @@ def _answers(facts: Mapping[str, Any], language: str) -> str:
     if not isinstance(answers, Mapping):
         return ""
     parts: list[str] = []
-    if answers.get("need_manager"):
-        parts.append(_t(language, "need_manager"))
+    # "Трайфл и круассаны есть? И можно у вас посидеть?" — a thing we do not make is said plainly
+    # next to the other answer, never left out (audit 23.09.2026).
+    missing = {key: answers.get(key) for key in ("unknown_products", "available_products")}
+    parts.append("\n".join(_item_notes(missing, language)))
+    topic = answers.get("need_manager")
+    if topic:
+        # "Про оплату уточню у менеджера" — which of the questions waits for the manager.
+        key = f"need_manager_{topic}" if isinstance(topic, str) and f"need_manager_{topic}" in _TEXTS[language] else ""
+        parts.append(_t(language, key or "need_manager"))
     parts.extend(_faq_block(answers))
     if _text(answers.get("delivery_info")):
         parts.append(_text_block(answers.get("delivery_info")))
@@ -919,6 +976,11 @@ def _address_clarify(facts: Mapping[str, Any], missing_fields: Sequence[str], la
         body = f"{_t(language, 'address_not_found')} {hint}"
     if facts.get("then_summary"):
         body = _paragraphs(body, _t(language, "address_continue"))
+    town = _text(facts.get("out_of_town"))
+    if town:
+        # Not looked up in our city (03 §7): the arrangement first, then the map pin.
+        link_text = _t(language, "address_town_link", link=link) if link else ""
+        body = _t(language, "address_other_town", town=town) + link_text
     return _paragraphs(_answers(facts, language), body, _join_questions(_questions(missing_fields, language), language))
 
 
@@ -930,10 +992,17 @@ def _small_talk(facts: Mapping[str, Any], missing_fields: Sequence[str], languag
         "goodbye": "small_talk_goodbye",
         "ack": "small_talk_ack",
         "done": "small_talk_ack",
+        "ping": "small_talk_ping",
     }.get(kind, "small_talk_chat")
     reminder = _reminder(facts, missing_fields, language)
+    if facts.get("again"):
+        again = "small_talk_thanks_again" if kind in ("thanks", "goodbye") else "small_talk_again"
+        return _paragraphs(_t(language, again), reminder)
     if kind in ("ack", "done") and reminder:
         return reminder
+    if kind == "ping":
+        # "Алло?" / "вы тут?": we are here — and the open question again, or "what can we do?".
+        return f"{_t(language, key)} {reminder or _t(language, 'small_talk_ping_question')}"
     return _paragraphs(_t(language, key), reminder)
 
 
@@ -955,17 +1024,31 @@ def _with_reminder(body: str, facts: Mapping[str, Any], missing_fields: Sequence
     return _paragraphs(body, _reminder(facts, missing_fields, language))
 
 
+def _info(body: str, facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    """An answer, then the other questions of the same message (``answers``), then the open draft's
+    question: "Сколько стоит коробка и есть ли доставка?" gets both answers (audit 23.09.2026)."""
+    return _paragraphs(body, _answers(facts, language), _reminder(facts, missing_fields, language))
+
+
+def _need_manager(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    """SPEC §40, plus whatever else the message asked that the data does answer. Asked again, it is
+    said in other words — "already with the manager" — instead of repeating the same sentence."""
+    key = "need_manager_again" if facts.get("again") else "need_manager"
+    return _paragraphs(_answers(facts, language), _t(language, key))
+
+
 def _greeting(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
     """ "Добрый день! Что желаете заказать? 😊" — the customer's own greeting back (fact ``greeting``);
     with an open draft its questions or the confirmation reminder take the place of the question."""
     reminder = _reminder(facts, missing_fields, language)
-    return f"{_greeting_line(facts, language)} {reminder or _t(language, 'greeting_question')}"
+    question = _t(language, "greeting_question_again" if facts.get("again") else "greeting_question")
+    return f"{_greeting_line(facts, language)} {reminder or question}"
 
 
 def _faq_answer(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
     answers = [_text_block(entry.get("answer")) for entry in facts.get("faq") or [] if isinstance(entry, Mapping)]
     body = _paragraphs(*answers) or _t(language, "need_manager")
-    return _with_reminder(body, facts, missing_fields, language)
+    return _info(body, facts, missing_fields, language)
 
 
 def _text_block(value: Any) -> str:
@@ -1019,13 +1102,18 @@ def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
     products = [product for product in facts.get("products") or [] if isinstance(product, Mapping)]
     if not products:
         return _with_reminder(_t(language, "need_manager"), facts, missing_fields, language)
+    # "Круассаны есть? А фисташковый сколько?": what we do not make is said first, in one line —
+    # the list below is already the answer to "what do you have".
+    missing = _item_notes({"unknown_products": facts.get("unknown_products")}, language)
     if facts.get("price_list_photo"):
         # The picture of the price list is sent just before this text (03 §1.4): the list itself is
         # on it, so repeating twelve prices underneath would be the wall of text all over again.
         body = _t(language, "price_list_photo")
     elif facts.get("asked_specific"):
-        # A question about named products ("что такое фисташковый?") — with the description.
-        body = "\n".join(_product_line(product, language) for product in products)
+        # A question about named products ("что такое фисташковый?") — with the description; about a
+        # group of them ("а большие есть?") — one short line each, the list is what was asked for.
+        described = len(products) <= 2
+        body = "\n".join(_product_line(product, language, description=described) for product in products)
     else:
         lines, sizes = _catalog_lines(products, language)
         body = f"{_t(language, 'products_intro')}\n" + "\n".join(lines)
@@ -1038,18 +1126,22 @@ def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
         body += "\n" + _t(
             language, "packing_note", min=packing_min, examples=_number_series(facts.get("packing_examples"))
         )
-    return _with_reminder(body, facts, missing_fields, language)
+    return _info("\n".join([*missing, body]), facts, missing_fields, language)
 
 
 def _unknown_product(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    if facts.get("again") and facts.get("unknown_products"):
+        # "я спрашиваю про пирожки" right after "пирожков нет": the same list again helps nobody.
+        body = _t(language, "unknown_products_again", names=_quoted(facts["unknown_products"]))
+        return _info(body, facts, missing_fields, language)
     notes = _item_notes({key: facts.get(key) for key in ("unknown_products", "available_products")}, language)
-    return _with_reminder("\n".join(notes) or _t(language, "need_manager"), facts, missing_fields, language)
+    return _info("\n".join(notes) or _t(language, "need_manager"), facts, missing_fields, language)
 
 
 def _order_status(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
     orders = [order for order in facts.get("orders") or [] if isinstance(order, Mapping)]
     if not orders:
-        return _with_reminder(_t(language, "no_active_orders"), facts, missing_fields, language)
+        return _info(_t(language, "no_active_orders"), facts, missing_fields, language)
     lines: list[str] = []
     for order in orders:
         status = STATUS_LABELS[language].get(_text(order.get("status")), _text(order.get("status")))
@@ -1065,7 +1157,7 @@ def _order_status(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
         if total:
             parts.append(total)
         lines.append(", ".join(parts))
-    return _with_reminder("\n".join(lines), facts, missing_fields, language)
+    return _info("\n".join(lines), facts, missing_fields, language)
 
 
 def _faq_block(facts: Mapping[str, Any]) -> list[str]:
@@ -1073,13 +1165,18 @@ def _faq_block(facts: Mapping[str, Any]) -> list[str]:
 
 
 def _delivery_info(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
+    faq = _faq_block(facts)
+    if any(faq):
+        # The owner's answer to exactly this question. The settings texts say the same things again
+        # (price, pickup, hours): printed together they were the wall of text (audit 23.09.2026).
+        return _info(_paragraphs(*faq), facts, missing_fields, language)
     lines = [_text_block(facts.get("delivery_info"))]
     if _text(facts.get("pickup_address")):
         lines.append(f"{_t(language, 'pickup')}: {_text(facts.get('pickup_address'))}")
     if _text(facts.get("working_hours")):
         lines.append(f"{_t(language, 'working_hours')}: {_text(facts.get('working_hours'))}")
-    body = _paragraphs(*lines, *_faq_block(facts)) or _t(language, "need_manager")
-    return _with_reminder(body, facts, missing_fields, language)
+    body = _paragraphs(*lines) or _t(language, "need_manager")
+    return _info(body, facts, missing_fields, language)
 
 
 def _payment_info(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -1088,7 +1185,7 @@ def _payment_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
         _prepayment_info(facts.get("prepayment"), language),
         *_faq_block(facts),
     ) or _t(language, "need_manager")
-    return _with_reminder(body, facts, missing_fields, language)
+    return _info(body, facts, missing_fields, language)
 
 
 def _ask_receipt(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
@@ -1177,7 +1274,7 @@ _RENDERERS: dict[str, Callable[[Mapping[str, Any], Sequence[str], str], str]] = 
     "PAYMENT_INFO": _payment_info,
     "ADDRESS_CLARIFY": _address_clarify,
     "HANDOFF": _handoff,
-    "NEED_MANAGER": _simple("need_manager"),
+    "NEED_MANAGER": _need_manager,
     "UNKNOWN_PRODUCT": _unknown_product,
     "CLARIFY": _simple("clarify"),
     "BLOCKED": _simple("blocked"),

@@ -424,7 +424,7 @@ def test_unknown_product_is_reported_with_the_active_catalog(
 
     assert outcome.reply.kind == ReplyKind.ASK_MISSING
     assert reply_text(outcome).startswith(
-        "К сожалению, «наполеон» нет в нашем каталоге.\nСейчас можно заказать: Красный бархат, Медовик, Эклер."
+        "К сожалению, «наполеон» у нас нет.\nСейчас можно заказать: Красный бархат, Медовик, Эклер."
     )
     assert bot.draft().items == []
 
@@ -454,7 +454,7 @@ def test_inactive_product_cannot_be_ordered(
 
     outcome = bot.say("Чизкейк")
 
-    assert "«Чизкейк» нет в нашем каталоге" in reply_text(outcome)
+    assert "«Чизкейк» у нас нет" in reply_text(outcome)
     assert bot.draft().items == []
 
 

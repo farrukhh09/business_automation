@@ -5,7 +5,8 @@ fields); this module only decides *how* it is worded:
 
 - kinds in ``TEMPLATE_KINDS`` (greeting, summary, confirmation, cancellation, handoff, map link…) are
   always rendered by ``app.ai.templates`` — their numbers and their meaning must never depend on a model;
-  so is an ``ASK_MISSING`` that carries item choices or a refusal (``uses_template``);
+  so are the catalog answers (``PRODUCT_INFO``, ``UNKNOWN_PRODUCT``) and an ``ASK_MISSING`` that
+  carries item choices or a refusal (``uses_template``);
 - every other kind is worded by the LLM (``complete_text``) under the reply system prompt, then
   checked by ``ResponseGuard`` (money only from FACTS, no confirmation claims, no invented stock or
   discounts, no catalog product outside FACTS) and by a language check. Any LLM error, an empty
@@ -159,11 +160,13 @@ def uses_template(plan: ReplyPlan) -> bool:
     if plan.kind in TEMPLATE_KINDS:
         return True
     if plan.kind == ReplyKind.SMALL_TALK:
-        return plan.facts.get("small_talk") in ("ack", "done")
-    if plan.kind == ReplyKind.PRODUCT_INFO and not plan.facts.get("asked_specific"):
-        # The whole price list is a table — every flavour in two sizes with two prices. Worded by
-        # the model it grows into a wall of text and invents sizes (23.09.2026), so the template
-        # prints it; a question about one named product is still worded by the model.
+        # "again": the model's words were the ones that came out the same twice
+        return plan.facts.get("small_talk") in ("ack", "done", "ping") or bool(plan.facts.get("again"))
+    if plan.kind in (ReplyKind.PRODUCT_INFO, ReplyKind.UNKNOWN_PRODUCT):
+        # Names, prices and "такого у нас нет" are data. The whole price list worded by the model grew
+        # into a wall of text with invented sizes (23.09.2026), and a question about one product
+        # came back as "дополнительного крема нет в каталоге, у нас фирменный рецепт" — a refusal
+        # nobody decided (dialog #3). The template states exactly what the catalog says.
         return True
     return plan.kind == ReplyKind.ASK_MISSING and any(plan.facts.get(key) for key in EXACT_ASK_FACTS)
 
@@ -233,7 +236,7 @@ def _fact_strings(facts: Mapping[str, Any]) -> list[str]:
 #: ("Саломат бошед!" is "you're welcome", not a greeting), so the lookahead requires a non-letter.
 _GREETING_OPENER_RE = re.compile(
     r"^\s*(?:"
-    r"(?:ва\s*)?ал[аеи]йкум\s+(?:ас-?салом[у]?|салом)"
+    r"(?:[вб]а\s*)?ал[аеи]йкум\s+(?:ас-?салом[у]?|салом)"
     r"|ас-?салом[у]?(?:\s+ал[аеи]йкум)?"
     r"|салом(?:\s+ал[аеи]йкум)?"
     r"|(?:субҳ|субх|рӯз|руз|шом)\s+ба\s+хайр"

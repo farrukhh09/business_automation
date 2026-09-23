@@ -68,6 +68,9 @@ def _pending(value: Any) -> list[dict[str, Any]]:
                 "name": entry.get("name") if isinstance(entry.get("name"), str) else None,
                 "options": [option for option in entry.get("options") or [] if _int_or_none(option) is not None],
                 "comment": entry.get("comment") if isinstance(entry.get("comment"), str) else None,
+                # "микс" / "все разные" that could not be assembled: the next question is about the
+                # count or the choice of flavours, not "какие именно?" again (03 §1.3)
+                "mix": bool(entry.get("mix")),
             }
         )
     return result

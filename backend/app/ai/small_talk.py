@@ -8,6 +8,7 @@ phone number means "go on". Anything with more content ("спасибо, а ск
 Phrases are stored normalized + Tajik-folded like every other keyword list (``text_normalize``).
 """
 
+import re
 from collections import Counter
 from enum import StrEnum
 
@@ -23,6 +24,7 @@ class SmallTalk(StrEnum):
     ACK = "ack"  # "ок", "хорошо", "дальше" — the customer agrees to continue
     DONE = "done"  # "это всё", "больше ничего" — nothing more to add to the order; go on
     DECLINE = "decline"  # "тогда не надо", "дорого, спасибо" — the customer is backing out
+    PING = "ping"  # "алло", "вы тут?", "?" — the customer checks that somebody is there
     NONE = "none"
 
 
@@ -217,7 +219,8 @@ _DONE = (
 #: Backing out before anything is placed: "тогда не надо", "не буду" (dialog #46, 21.09.2026). Only
 #: whole messages count (``detect_small_talk``). "Подумаю" is deliberately absent — that is a maybe,
 #: not a no — and so is "дорого": a complaint about the price is an objection the FAQ answers
-#: ("Почему так дорого?", dialog #58, 22.09.2026), not a goodbye.
+#: ("Почему так дорого?", dialog #58, 22.09.2026), not a goodbye. "Потом напишу" is a "later", not a
+#: "no": it used to drop the draft here while the FAQ answered it "Хорошо, ждём!" (audit 23.09.2026).
 _DECLINE = (
     "не надо",
     "тогда не надо",
@@ -232,7 +235,6 @@ _DECLINE = (
     "отказываюсь",
     "в другой раз",
     "как нибудь потом",
-    "потом напишу",
     "нет не надо",
     "даркор не",
     "даркор нест",
@@ -245,6 +247,33 @@ _DECLINE = (
     "дигар вақт",
 )
 
+#: "Is anybody there?" — after a silence or an answer the customer did not expect. The reply says we
+#: are here and repeats the open question, if there is one (audit 23.09.2026).
+_PING = (
+    "алло",
+    "ало",
+    "аллоо",
+    "ау",
+    "аууу",
+    "вы тут",
+    "вы здесь",
+    "вы где",
+    "есть кто",
+    "есть кто нибудь",
+    "кто нибудь",
+    "ответьте",
+    "ответьте пожалуйста",
+    "почему не отвечаете",
+    "вы отвечаете",
+    "хастед",
+    "хастед ми",
+    "шумо хастед",
+    "кужоед",
+    "чаво",
+    "чавоб дихед",
+    "ҷавоб диҳед",
+)
+
 _GREETING_CATEGORY = "greeting:"
 
 _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
@@ -254,12 +283,17 @@ _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
         ("goodbye", _GOODBYE),
         ("done", _DONE),
         ("decline", _DECLINE),
+        ("ping", _PING),
         *((f"{_GREETING_CATEGORY}{greeting.value}", phrases) for greeting, phrases in _GREETINGS.items()),
     ]
 )
 
 #: Words that may accompany small talk without turning it into a request ("спасибо вам большое!").
-_FILLER = frozenset({"вам", "тебе", "вас", "большое", "огромное", "очень", "всем", "калон", "зиед", "ба", "шумо"})
+_FILLER = frozenset(
+    {"вам", "тебе", "вас", "большое", "огромное", "очень", "всем", "калон", "зиед", "ба", "шумо", "ну", "эй", "ми"}
+)
+#: A message of nothing but question marks (and maybe "!" or dots): "?", "??", "?!".
+_QUESTION_MARKS_RE = re.compile(r"^\s*[?？]+[?？!.\s]*$")
 
 
 def _scan(text: str | None) -> tuple[list[str], dict[str, list[str]]]:
@@ -274,6 +308,8 @@ def detect_small_talk(text: str | None) -> SmallTalk:
     "Спасибо, это всё" is done — while an order is being filled, the "это всё" is what matters.
     """
     tokens, found = _scan(text)
+    if not tokens and _QUESTION_MARKS_RE.match(str(text or "")):
+        return SmallTalk.PING  # "?", "??", "?!" — nothing but a question mark
     if not found:
         return SmallTalk.NONE
     matched = Counter(token for phrases in found.values() for phrase in phrases for token in phrase.split())
@@ -282,6 +318,8 @@ def detect_small_talk(text: str | None) -> SmallTalk:
         return SmallTalk.NONE  # there is more in the message than small talk
     if "decline" in found:
         return SmallTalk.DECLINE  # before "thanks": "дорого, спасибо" is a refusal, not gratitude
+    if "ping" in found:
+        return SmallTalk.PING  # "Здравствуйте, вы тут?" asks whether anybody answers
     if "done" in found:
         return SmallTalk.DONE
     if "thanks" in found:

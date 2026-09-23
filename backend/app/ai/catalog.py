@@ -23,10 +23,29 @@ from typing import Any
 
 from app.ai.text_normalize import normalize_fold
 
-__all__ = ["SIZE_WORDS", "FlavourGroup", "flavour_bases", "flavour_groups", "flavour_names", "product_name"]
+__all__ = [
+    "SIZE_WORDS",
+    "FlavourGroup",
+    "flavour_bases",
+    "flavour_groups",
+    "flavour_names",
+    "product_name",
+    "sized_products",
+]
 
 #: How the price list of 23.09.2026 names the larger size («БОЛЬШОЙ РАЗМЕР»), RU and TG, folded.
 SIZE_WORDS: tuple[str, ...] = ("большой", "большая", "большие", "калон")
+#: How customers ask for it: "большие", "крупные", "калонаш", "калонтар". Whole forms of "большой",
+#: not a stem: "больше крема" / "побольше" ask for more of something, not for the large size, and
+#: "большое" is left out for "большое спасибо".
+_SIZE_FORMS: frozenset[str] = frozenset(
+    {"большой", "большая", "большие", "большого", "больших", "большим", "большую", "большими", "большом"}
+)
+_SIZE_STEMS: tuple[str, ...] = ("крупн", "калон")
+
+
+def _is_size_word(token: str) -> bool:
+    return token in _SIZE_FORMS or token.startswith(_SIZE_STEMS)
 
 
 @dataclass(frozen=True)
@@ -80,3 +99,22 @@ def flavour_bases(products: Iterable[Any]) -> list[Any]:
 def flavour_names(names: Iterable[str]) -> list[str]:
     """The same folding for a plain list of names: «Классический большой» drops into its flavour."""
     return [product_name(group.base) for group in flavour_groups({"name": name} for name in names)]
+
+
+def sized_products(products: Iterable[Any], text: str | None) -> list[Any]:
+    """The larger sizes a question asks about: "а большие есть?" → every large one; "большие
+    шоколадные" → the chocolate one. ``[]`` when the text names no size or the catalog has none —
+    a size word is never "такого у нас нет" (audit 23.09.2026)."""
+    tokens = normalize_fold(text).split()
+    if not any(_is_size_word(token) for token in tokens):
+        return []
+    groups = flavour_groups(products)
+    sized = [variant for group in groups for _, variant in group.variants]
+    others = [token for token in tokens if not _is_size_word(token) and len(token) >= 4]
+    named = [
+        variant
+        for group in groups
+        for _, variant in group.variants
+        if any(token[:5] == _split(group.base)[0][:5] for token in others)
+    ]
+    return named or sized

@@ -11,6 +11,9 @@ returns is re-checked here before ``DialogService`` sees it —
 - ``delivery_time`` that is not a real 24-hour time → ``null`` (``18.30`` is normalised to ``18:30``);
 - ``phone`` is kept exactly as the customer wrote it (``app/services/phone.py`` normalises it);
 - ``faq_ids`` / ``product_ids_asked`` are filtered to the ids that were actually offered;
+- ``products_asked_text`` keeps the customer's own words for what they ask about — also a thing the
+  catalog does not have ("пирожки", "торт"): ``DialogService`` answers "такого у нас нет" instead of
+  sending the price list to a question nobody asked (dialog #155, 23.09.2026);
 - an unknown ``intent`` becomes ``OTHER``, an unknown enum value becomes ``null``.
 
 SPEC §10 asks for a flat extraction object for logs and ``Message.ai_payload``; it is derived from
@@ -124,6 +127,9 @@ class UnderstandingResult(BaseModel):
     entities: Entities = Field(default_factory=Entities)
     faq_ids: list[int] = Field(default_factory=list)
     product_ids_asked: list[int] = Field(default_factory=list)
+    #: The customer's words for every product or kind of food the message asks ABOUT — in the
+    #: catalog or not ("а пирожки вы печёте?" → ["пирожки"]).
+    products_asked_text: list[str] = Field(default_factory=list)
     confirmation_signal: ConfirmationSignal = ConfirmationSignal.NONE
     address_candidate_choice: int | None = None
     other_topic: OtherTopic | None = None
@@ -215,6 +221,11 @@ def understanding_json_schema() -> dict[str, Any]:
             "entities": entities,
             "faq_ids": {"type": "array", "items": _integer("id from the FAQ block")},
             "product_ids_asked": {"type": "array", "items": _integer("catalog id the customer asks about")},
+            "products_asked_text": {
+                "type": "array",
+                "items": _string("the customer's own word for a product or food asked about"),
+                "description": "every product or kind of food this message asks about, in the catalog or not",
+            },
             "confirmation_signal": _enum(ConfirmationSignal, "wording of this message only"),
             "address_candidate_choice": _nullable(_integer("1-based choice from an offered address list")),
             "other_topic": _nullable(
@@ -355,6 +366,20 @@ def _clean_time(value: Any) -> str | None:
     return f"{hour:02d}:{minute:02d}"
 
 
+def _clean_texts(value: Any, limit: int = MAX_IDS) -> list[str]:
+    """A list of the customer's words: trimmed, without empties and repeats, at most ``limit``."""
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes, Mapping)):
+        return []
+    result: list[str] = []
+    for entry in value:
+        text = _clean(entry, MAX_NAME_CHARS)
+        if text and text.casefold() not in (known.casefold() for known in result):
+            result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
 def _clean_confidence(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0.0
@@ -437,6 +462,7 @@ def _normalize(data: Mapping[str, Any], ctx: UnderstandingContext) -> dict[str, 
         },
         "faq_ids": _filter_ids(data.get("faq_ids"), ctx.faq_ids()),
         "product_ids_asked": _filter_ids(data.get("product_ids_asked"), ctx.catalog_ids()),
+        "products_asked_text": _clean_texts(data.get("products_asked_text")),
         "confirmation_signal": _as_enum(ConfirmationSignal, data.get("confirmation_signal"), ConfirmationSignal.NONE),
         "address_candidate_choice": _clean_choice(data.get("address_candidate_choice")),
         "other_topic": _as_enum(OtherTopic, data.get("other_topic")) if intent is Intent.OTHER else None,

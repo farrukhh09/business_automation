@@ -162,7 +162,8 @@ def test_a_question_about_one_product_still_gets_its_description(sized_catalog: 
     facts = {"products": _facts(sized_catalog[:1]), "asked_specific": True}
 
     assert render(ReplyKind.PRODUCT_INFO, "ru", facts, []) == "Классический синнамон — 10 сомони / шт."
-    assert uses_template(ReplyPlan(ReplyKind.PRODUCT_INFO, "ru", facts)) is False
+    # a catalog answer is the catalog's own words, never the model's (audit 23.09.2026, dialog #3)
+    assert uses_template(ReplyPlan(ReplyKind.PRODUCT_INFO, "ru", facts)) is True
 
 
 def test_the_tajik_price_list_says_the_size_in_tajik(sized_catalog: list[Product]) -> None:

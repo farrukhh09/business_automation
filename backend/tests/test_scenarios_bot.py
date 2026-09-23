@@ -1124,10 +1124,11 @@ def test_a_question_asked_together_with_order_data_is_answered_first(
     db.refresh(bot.conversation)
     assert not bot.conversation.needs_attention
 
-    # no payment methods in the settings: the manager is alerted, the order still goes on
+    # no payment methods in the settings: the manager is alerted, the order still goes on — and the
+    # customer hears which of the questions waits for the manager (audit 23.09.2026)
     second = bot.say("к 18:00, а картой можно?")
     assert reply_text(second) == (
-        "Мне нужно уточнить эту информацию у менеджера.\n\n"
+        "Про оплату уточню у менеджера — он напишет здесь.\n\n"
         "Уточните, пожалуйста:\n"
         "1. Это будет доставка или самовывоз?\n"
         "2. Напишите, пожалуйста, номер телефона для связи."

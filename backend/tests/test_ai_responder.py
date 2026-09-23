@@ -231,20 +231,41 @@ def test_template_kinds_never_reach_the_llm() -> None:
     assert llm.text_calls == []
 
 
+def _faq_plan(answer: str, language: str = "ru") -> ReplyPlan:
+    """An FAQ answer naming a product and its price: worded by the model, checked by the guard.
+
+    The catalog answers themselves (``PRODUCT_INFO``, ``UNKNOWN_PRODUCT``) are always templates
+    (05 §6), so the model's wording is exercised on the kind it still words.
+    """
+    return ReplyPlan(ReplyKind.FAQ_ANSWER, language, {"faq": [{"question": "Сколько стоит?", "answer": answer}]})
+
+
 def test_llm_wording_is_used_when_the_guard_accepts_it() -> None:
     llm = ScriptedLLM(reply="Здравствуйте! Медовик стоит 750 сомони 😊")
     responder = Responder(llm, catalog_names=["Медовик", "Наполеон"])
-    # a question about one named product — the whole price list is always a template (05 §6)
-    plan = ReplyPlan(
-        ReplyKind.PRODUCT_INFO, "ru", {"products": [{"name": "Медовик", "price": "750.00"}], "asked_specific": True}
-    )
+    plan = _faq_plan("Медовик — 750 сомони / шт.")
 
     reply = responder.generate_reply(plan)
 
     # the customer did not greet in this message (no ``greeting`` fact): the model's opener is dropped
     assert reply.source == ReplySource.LLM and reply.text == "Медовик стоит 750 сомони 😊"
     assert reply.fixes == ("greeting_removed",)
-    assert "KIND: PRODUCT_INFO" in llm.text_calls[0]["prompt"]
+    assert "KIND: FAQ_ANSWER" in llm.text_calls[0]["prompt"]
+
+
+@pytest.mark.parametrize("kind", [ReplyKind.PRODUCT_INFO, ReplyKind.UNKNOWN_PRODUCT])
+def test_catalog_answers_are_never_worded_by_the_model(kind: ReplyKind) -> None:
+    # dialog #3: asked "можно больше крема?", the model answered "дополнительного крема нет в каталоге,
+    # у нас фирменный рецепт" — a refusal nobody decided. Names, prices and "нет" come from the catalog.
+    llm = ScriptedLLM(reply="Дополнительного крема нет, у нас фирменный рецепт.")
+    facts = {
+        "products": [{"name": "Медовик", "price": "750.00", "unit": "шт."}],
+        "asked_specific": True,
+        "unknown_products": ["пирожки"],
+        "available_products": [{"name": "Медовик"}],
+    }
+    reply = Responder(llm, catalog_names=["Медовик"]).generate_reply(ReplyPlan(kind, "ru", facts))
+    assert reply.source == ReplySource.TEMPLATE and llm.text_calls == []
 
 
 @pytest.mark.parametrize(
@@ -259,11 +280,7 @@ def test_llm_wording_is_used_when_the_guard_accepts_it() -> None:
 )
 def test_guard_violation_falls_back_to_the_template(llm_text: str, violation: str) -> None:
     responder = Responder(ScriptedLLM(reply=llm_text), catalog_names=["Медовик", "Наполеон"])
-    plan = ReplyPlan(
-        ReplyKind.PRODUCT_INFO,
-        "ru",
-        {"products": [{"name": "Медовик", "price": "750.00", "unit": "шт."}], "asked_specific": True},
-    )
+    plan = _faq_plan("Медовик — 750 сомони / шт.")
 
     reply = responder.generate_reply(plan)
 
@@ -414,16 +431,7 @@ def test_llm_error_falls_back_to_the_template() -> None:
 )
 def test_mixed_language_and_foreign_script_fall_back(language: str, llm_text: str, violation: str) -> None:
     responder = Responder(ScriptedLLM(reply=llm_text), catalog_names=["Торт «Наполеон»"])
-    plan = ReplyPlan(
-        ReplyKind.PRODUCT_INFO,
-        language,
-        {
-            "products": [
-                {"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "слоёные коржи"}
-            ],
-            "asked_specific": True,
-        },
-    )
+    plan = _faq_plan("Торт «Наполеон» — 200 сомони / шт., слоёные коржи.", language)
     reply = responder.generate_reply(plan)
     assert reply.source == ReplySource.FALLBACK
     assert any(item.startswith(violation) for item in reply.violations), reply.violations
@@ -432,14 +440,7 @@ def test_mixed_language_and_foreign_script_fall_back(language: str, llm_text: st
 def test_proper_tajik_reply_with_russian_product_name_passes() -> None:
     text = "Торти «Наполеон» 200 сомонӣ арзиш дорад, вазнаш 1,5 кг 😊"
     responder = Responder(ScriptedLLM(reply=text), catalog_names=["Торт «Наполеон»"])
-    plan = ReplyPlan(
-        ReplyKind.PRODUCT_INFO,
-        "tg",
-        {
-            "products": [{"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "1,5 кг"}],
-            "asked_specific": True,
-        },
-    )
+    plan = _faq_plan("Торт «Наполеон» — 200 сомонӣ / дона, 1,5 кг.", "tg")
     reply = responder.generate_reply(plan)
     assert reply.source == ReplySource.LLM, reply.violations
 
