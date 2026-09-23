@@ -13,7 +13,7 @@ from enum import StrEnum
 
 from app.ai.text_normalize import build_phrase_index, normalize_fold, scan_phrases
 
-__all__ = ["Greeting", "SmallTalk", "detect_greeting", "detect_small_talk"]
+__all__ = ["Greeting", "SmallTalk", "contains_thanks", "detect_greeting", "detect_small_talk"]
 
 
 class SmallTalk(StrEnum):
@@ -291,6 +291,16 @@ def detect_small_talk(text: str | None) -> SmallTalk:
     if "ack" in found:
         return SmallTalk.ACK
     return SmallTalk.GREETING
+
+
+def contains_thanks(text: str | None) -> bool:
+    """True when the message thanks anywhere in it ("Спасибо! А доставка есть?"), not only as a whole.
+
+    ``Responder`` uses this to tell a real thank-you from the gratitude the model invents at the
+    start of an answer (23.09.2026): a question may be answered warmly, but not thanked for.
+    """
+    _, found = _scan(text)
+    return "thanks" in found
 
 
 def detect_greeting(text: str | None) -> Greeting | None:

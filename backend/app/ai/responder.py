@@ -12,7 +12,10 @@ fields); this module only decides *how* it is worded:
   answer or a violation falls back to the template of the same kind.
 - a greeting the model opens with when the customer did not greet in this very message is removed
   before the checks (``strip_greeting``): the prompt forbids it, yet in a live Tajik dialog the model
-  kept copying the "Ва алейкум ассалом!" of the first reply from the history (18.09.2026). Prices are
+  kept copying the "Ва алейкум ассалом!" of the first reply from the history (18.09.2026);
+- a thank-you the model opens an *answer* with when the customer thanked nobody is removed the same
+  way (``strip_thanks``, ``ANSWER_KINDS``): "а выпечка у вас вкусная?" came back as "Спасибо,
+  стараемся делать её очень вкусной!" — a doubt read as a compliment (23.09.2026). Prices are
   brought to the templates' form (``fix_money``: "100.00 сомонӣ кор." → "100 сомонӣ / қуттӣ."). What
   was corrected is reported in ``Reply.fixes``.
 """
@@ -29,12 +32,14 @@ from app.ai import prompts, templates
 from app.ai.guard import ResponseGuard
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError
+from app.ai.small_talk import contains_thanks
 from app.ai.text_normalize import normalize_fold
 from app.core.logging import get_logger, log_event
 
 logger = get_logger(__name__)
 
 __all__ = [
+    "ANSWER_KINDS",
     "EXACT_ASK_FACTS",
     "TEMPLATE_KINDS",
     "Reply",
@@ -45,6 +50,7 @@ __all__ = [
     "fact_amounts",
     "fix_money",
     "strip_greeting",
+    "strip_thanks",
     "uses_template",
 ]
 
@@ -252,6 +258,50 @@ def strip_greeting(text: str) -> tuple[str, bool]:
     return rest[:1].upper() + rest[1:], True
 
 
+# --------------------------------------------------------------------------- gratitude opener
+
+#: Kinds that answer a question the customer asked. A reply of one of these opening with "Спасибо"
+#: reads the question as praise: "а выпечка у вас вкусная?" was answered with "Спасибо, стараемся
+#: делать её очень вкусной!" (dialog #148, 23.09.2026) — the customer doubted, and was thanked for a
+#: compliment they never paid. Kinds that acknowledge data the customer just gave (ASK_MISSING and
+#: the like) keep their "Спасибо, записали": there the gratitude is for the answer, not for a question.
+ANSWER_KINDS: frozenset["ReplyKind"] = frozenset(
+    {
+        ReplyKind.FAQ_ANSWER,
+        ReplyKind.PRODUCT_INFO,
+        ReplyKind.DELIVERY_INFO,
+        ReplyKind.PAYMENT_INFO,
+        ReplyKind.ORDER_STATUS_INFO,
+        ReplyKind.UNKNOWN_PRODUCT,
+    }
+)
+
+#: "Спасибо!", "Спасибо большое,", "Благодарим за вопрос —", "Раҳмат,", "Ташаккур!" at the very start.
+_THANKS_OPENER_RE = re.compile(
+    r"^\s*(?:большое\s+)?(?:спасибо|благодар(?:им|ю)|рахмат|раҳмат|ташаккур|ташакур|сипос)"
+    r"(?![а-яёӣӯҳқғҷ])"
+    r"(?:\s+(?:вам|шумо|большое|калон|зиёд|зиед))*"
+    r"(?:\s+(?:за|барои)\s+(?:вопрос|сообщение|вашe?\s+сообщение|савол|паём))?"
+    r"[\s!,.…:;—-]*",
+    re.IGNORECASE,
+)
+
+
+def strip_thanks(text: str) -> tuple[str, bool]:
+    """Remove a thank-you opener from an answer: ``"Спасибо! Печём под заказ…"`` → the answer alone.
+
+    Only for :data:`ANSWER_KINDS` and only when the customer did not thank in this very message —
+    then the gratitude is the model's own invention (see :data:`ANSWER_KINDS`). The remainder starts
+    with a capital letter; a reply that was nothing but thanks comes back empty and the template of
+    the kind is used instead.
+    """
+    match = _THANKS_OPENER_RE.match(text)
+    if match is None:
+        return text, False
+    rest = text[match.end() :].lstrip()
+    return rest[:1].upper() + rest[1:], True
+
+
 # --------------------------------------------------------------------------- money wording
 
 #: "100.00 сомонӣ" → "100 сомонӣ": FACTS carry prices as "100.00", the prompt asks for "100".
@@ -314,6 +364,11 @@ class Responder:
             text, removed = strip_greeting(text)
             if removed:
                 fixes.append("greeting_removed")
+        if plan.kind in ANSWER_KINDS and not contains_thanks(plan.context.get("customer_message")):
+            # An answer that opens with "Спасибо" turns the customer's question into praise.
+            text, removed = strip_thanks(text)
+            if removed:
+                fixes.append("thanks_removed")
 
         if not text:
             return self._fallback(plan, template_text, ("empty_reply",))

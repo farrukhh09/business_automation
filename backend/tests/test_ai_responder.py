@@ -14,6 +14,7 @@ from app.ai.responder import (
     Responder,
     fact_amounts,
     strip_greeting,
+    strip_thanks,
 )
 from tests.bot_fakes import ScriptedLLM
 
@@ -340,6 +341,60 @@ def test_a_repeated_greeting_is_removed_from_the_model_reply() -> None:
     bare = Responder(ScriptedLLM(reply="Салом!")).generate_reply(plan)
     assert bare.source == ReplySource.FALLBACK and "empty_reply" in bare.violations
     assert bare.text == "Фармоиш барои кадом рӯз лозим?"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Спасибо! Печём под заказ, к дню выдачи.", "Печём под заказ, к дню выдачи."),
+        ("Спасибо, стараемся делать её очень вкусной!", "Стараемся делать её очень вкусной!"),
+        ("Спасибо большое за вопрос — доставка 14 сомони.", "Доставка 14 сомони."),
+        ("Благодарим за сообщение! Кафе у нас нет.", "Кафе у нас нет."),
+        ("Раҳмат, кӯшиш мекунем ки бомазза бошад!", "Кӯшиш мекунем ки бомазза бошад!"),
+        ("Ташаккур! Бо фармоиш мепазем.", "Бо фармоиш мепазем."),
+    ],
+)
+def test_a_thanks_opener_is_stripped(text: str, expected: str) -> None:
+    assert strip_thanks(text) == (expected, True)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Печём под заказ. Спасибо, что дождались!",
+        "Спасибочки — так мы не пишем",
+        "Рахматулло привезёт заказ",
+        "Записали, спасибо!",
+    ],
+)
+def test_gratitude_elsewhere_is_kept(text: str) -> None:
+    assert strip_thanks(text) == (text, False)
+
+
+def test_an_answer_does_not_thank_the_customer_for_a_question() -> None:
+    """Dialog #148, 23.09.2026: "а выпечка у вас вкусная?" — a doubt — came back as "Спасибо,
+    стараемся делать её очень вкусной!", as if the customer had paid a compliment."""
+    llm = ScriptedLLM(reply="Спасибо, стараемся! Печём под заказ, к дню выдачи.")
+    facts = {"faq": [{"question": "А выпечка вкусная?", "answer": "Печём под заказ, к дню выдачи."}]}
+    plan = ReplyPlan(ReplyKind.FAQ_ANSWER, "ru", facts, context={"customer_message": "а выпечка у вас вкусная ?"})
+
+    reply = Responder(llm).generate_reply(plan)
+
+    assert reply.text == "Стараемся! Печём под заказ, к дню выдачи."
+    assert reply.fixes == ("thanks_removed",)
+
+    # the customer really did thank: the reply may thank back
+    thanked = Responder(llm).generate_reply(
+        replace(plan, context={"customer_message": "Спасибо! А выпечка вкусная?"})
+    )
+    assert thanked.text.startswith("Спасибо, стараемся!") and thanked.fixes == ()
+
+    # a reply that acknowledges data the customer gave keeps its "Спасибо"
+    asking = ReplyPlan(
+        ReplyKind.ASK_MISSING, "ru", {}, ["delivery_date"], context={"customer_message": "90 123 45 67"}
+    )
+    kept = Responder(ScriptedLLM(reply="Спасибо, записали номер. На какой день?")).generate_reply(asking)
+    assert kept.text == "Спасибо, записали номер. На какой день?" and kept.fixes == ()
 
 
 def test_llm_error_falls_back_to_the_template() -> None:
