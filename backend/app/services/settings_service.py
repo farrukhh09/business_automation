@@ -24,8 +24,9 @@ logger = get_logger(__name__)
 BUSINESS_SETTINGS_KEY = "business"
 WAREHOUSE_FIELD = "warehouse"
 NULLABLE_WAREHOUSE_FIELDS = frozenset({"latitude", "longitude"})
-#: Top-level settings where an explicit ``null`` means "no value" rather than "leave unchanged".
-NULLABLE_FIELDS = frozenset({"order_hours_start", "order_hours_end"})
+#: Top-level settings where an explicit ``null`` means "no value" rather than "leave unchanged"
+#: (``price_list_image``: "Убрать фото" in the settings page).
+NULLABLE_FIELDS = frozenset({"order_hours_start", "order_hours_end", "price_list_image"})
 #: Fields checked together by a model-level validator of ``BusinessSettings``. A stored value that
 #: breaks such a check has no field in its error location, so ``_effective`` drops the whole group —
 #: but only the group that is invalid on its own, never the other settings (see :func:`_group_is_valid`).

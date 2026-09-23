@@ -4,7 +4,9 @@ Two kinds of files, told apart by the name prefix:
 
 - ``in-*`` — media of incoming messages (voice, images), downloaded right away because Instagram
   CDN links expire; shown in the admin panel ("Диалоги");
-- ``tts-*`` — synthesized voice replies; Instagram fetches them by public URL; removed after 7 days.
+- ``tts-*`` — synthesized voice replies; Instagram fetches them by public URL; removed after 7 days;
+- ``pl-*`` — the price list picture the owner uploads in the settings (03 §1.4); Instagram fetches
+  it by public URL on every product question, so it is never cleaned up — only replaced.
 
 Names are ``<prefix>-<32 random url-safe chars>.<ext>``: unguessable, so the public
 ``GET /api/media/{filename}`` works as a capability link. The name is validated by a strict pattern
@@ -24,6 +26,8 @@ logger = get_logger(__name__)
 
 __all__ = [
     "INCOMING_PREFIX",
+    "PRICE_LIST_NAME_PATTERN",
+    "PRICE_LIST_PREFIX",
     "TTS_PREFIX",
     "TTS_RETENTION",
     "MediaStorage",
@@ -33,11 +37,15 @@ __all__ = [
 
 INCOMING_PREFIX = "in"
 TTS_PREFIX = "tts"
+PRICE_LIST_PREFIX = "pl"
 TTS_RETENTION = timedelta(days=7)
 MEDIA_URL_PREFIX = "/api/media/"
 
 _TOKEN_BYTES = 24  # → 32 url-safe characters
-_FILENAME_RE = re.compile(r"^(in|tts)-[A-Za-z0-9_-]{16,64}\.[a-z0-9]{2,4}$")
+_NAME_BODY = r"-[A-Za-z0-9_-]{16,64}\.[a-z0-9]{2,4}$"
+_FILENAME_RE = re.compile(r"^(in|tts|pl)" + _NAME_BODY)
+#: The name of a stored price list picture — the only media name a setting may hold (04 §12).
+PRICE_LIST_NAME_PATTERN = f"^{PRICE_LIST_PREFIX}{_NAME_BODY}"
 
 _MEDIA_TYPES: dict[str, str] = {
     "m4a": "audio/mp4",
@@ -116,7 +124,7 @@ class MediaStorage:
     # ------------------------------------------------------------------ files
 
     def save(self, data: bytes, *, prefix: str, extension: str) -> str:
-        if prefix not in (INCOMING_PREFIX, TTS_PREFIX):
+        if prefix not in (INCOMING_PREFIX, TTS_PREFIX, PRICE_LIST_PREFIX):
             raise ValueError(f"unknown media prefix: {prefix!r}")
         ext = extension.strip().lstrip(".").lower()
         if ext not in _MEDIA_TYPES:
@@ -140,6 +148,18 @@ class MediaStorage:
     def read(self, filename: str) -> bytes | None:
         path = self.path_for(filename)
         return path.read_bytes() if path is not None else None
+
+    def delete(self, filename: str | None) -> bool:
+        """Remove one file by name (the replaced price list picture). Missing or invalid → ``False``."""
+        path = self.path_for(filename or "")
+        if path is None:
+            return False
+        try:
+            path.unlink()
+        except OSError as exc:
+            log_event(logger, "media.delete_failed", level=logging.WARNING, error=type(exc).__name__)
+            return False
+        return True
 
     def cleanup(
         self, *, prefix: str = TTS_PREFIX, older_than: timedelta = TTS_RETENTION, now: datetime | None = None

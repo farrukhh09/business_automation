@@ -233,6 +233,8 @@ class DialogOutcome:
     reply: Reply | None = None
     handoff: bool = False
     actions: list[str] = field(default_factory=list)
+    #: A picture to send just before the reply, by media file name: the price list photo (03 §1.4).
+    image: str | None = None
 
 
 @dataclass(slots=True)
@@ -253,6 +255,8 @@ class _Turn:
     draft_loaded: bool = False
     catalog: list[Product] | None = None
     history: list[dict[str, str]] | None = None
+    #: The price list picture this reply goes with (03 §1.4), by media file name.
+    image: str | None = None
 
 
 class DialogService:
@@ -753,12 +757,33 @@ class DialogService:
             facts.update({"unknown_products": unknown, "available_products": [_product_fact(p) for p in products]})
             return self._finish(turn, ReplyPlan(ReplyKind.UNKNOWN_PRODUCT, language, facts, fields))
         facts.update({"products": [_product_fact(p) for p in (asked or products)], "asked_specific": bool(asked)})
+        if not asked and self._price_list_photo(turn):
+            # The whole assortment was asked about and the owner keeps a photo of the price list
+            # (03 §1.4): it goes instead of the twelve lines, with a short caption under it.
+            facts["price_list_photo"] = True
         if turn.business.order_quantity_step > 1 or turn.business.min_order_quantity > 1:
             # Prices are per piece while the bakery sells boxes: "сколько стоит коробка?" needs the
             # rule — the smallest order and the totals that fit it (03 §1.3).
             facts["packing_min"] = smallest_allowed_quantity(turn.business)
             facts["packing_examples"] = allowed_quantity_examples(turn.business)
         return self._finish(turn, ReplyPlan(ReplyKind.PRODUCT_INFO, language, facts, fields))
+
+    def _price_list_photo(self, turn: _Turn) -> bool:
+        """Attach the price list picture to this reply, once per dialog (03 §1.4).
+
+        Sent again only when the owner has uploaded a different picture — then the prices on it have
+        changed and the customer has an old one. A missing file (deleted by hand) is simply skipped:
+        the bot answers with the price list as text, as it did before there was a photo.
+        """
+        filename = (turn.business.price_list_image or "").strip()
+        if not filename or filename == turn.state.price_list_sent:
+            return False
+        media = self._media or MediaStorage(self.settings.media_root)
+        if media.path_for(filename) is None:
+            log_event(logger, "dialog.price_list_missing", level=logging.WARNING, conversation_id=turn.conversation.id)
+            return False
+        turn.image = filename
+        return True
 
     def _order_status(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
         orders = self.orders.active_for_customer(turn.customer.id, IN_PROGRESS_ORDER_STATUSES)
@@ -1802,6 +1827,7 @@ class DialogService:
         """03 §6: HUMAN_HANDOFF + one message on the customer's language."""
         turn.tools.request_operator(reason)
         turn.actions.append("handoff")
+        turn.image = None  # a picture belongs to an answer, not to "передаю менеджеру"
         plan = ReplyPlan(ReplyKind.HANDOFF, language, {"reason_code": reason_code, **(facts or {})})
         return self._finish(turn, plan, handoff=True, reset_attempts=reset_attempts)
 
@@ -1827,6 +1853,9 @@ class DialogService:
         turn.state.language = plan.language
         if turn.customer.language != Language(plan.language):
             turn.customer.language = Language(plan.language)
+        if turn.image:
+            # Remembered only once the picture really goes with this reply (a handoff drops it).
+            turn.state.price_list_sent = turn.image
         conversation.state = turn.state.to_json()
         if turn.message is not None and not turn.message.ai_processed:
             turn.message.ai_processed = True
@@ -1863,7 +1892,7 @@ class DialogService:
             awaiting=turn.state.awaiting,
             draft_order_id=turn.state.draft_order_id,
         )
-        return DialogOutcome(reply=reply, handoff=handoff, actions=list(turn.actions))
+        return DialogOutcome(reply=reply, handoff=handoff, actions=list(turn.actions), image=turn.image)
 
 
 # ====================================================================== module helpers

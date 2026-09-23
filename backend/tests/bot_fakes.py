@@ -187,6 +187,7 @@ class FakeMessenger:
         self.media_type = "audio/mp4"
         self.sent_texts: list[tuple[str, str]] = []
         self.sent_audio: list[tuple[str, str]] = []
+        self.sent_images: list[tuple[str, str]] = []
         self.downloads: list[str] = []
         self.send_error: Exception | None = None
         self.download_error: Exception | None = None
@@ -205,6 +206,13 @@ class FakeMessenger:
         self._counter += 1
         self.sent_audio.append((recipient_id, url))
         return f"mid.audio.{self._counter}"
+
+    def send_image(self, recipient_id: str, url: str) -> str:
+        if self.send_error is not None:
+            raise self.send_error
+        self._counter += 1
+        self.sent_images.append((recipient_id, url))
+        return f"mid.image.{self._counter}"
 
     def get_user_profile(self, igsid: str) -> dict[str, str | None] | None:
         return self.profile

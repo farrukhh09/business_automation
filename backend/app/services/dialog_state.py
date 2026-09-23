@@ -121,6 +121,10 @@ class DialogState:
     #: Follow-ups already sent (03 §6a), as ``"{stage}:{order_id}"`` — one per stage of one order, so
     #: a customer is never chased twice about the same thing. Only the last few are kept.
     follow_ups_sent: list[str] = field(default_factory=list)
+    #: The price list picture already sent in this dialog, by file name (03 §1.4): asked a second
+    #: time, the customer gets the prices as text instead of the same photo again. A new picture
+    #: (another name) is sent again — the prices on it have changed.
+    price_list_sent: str | None = None
 
     @classmethod
     def from_json(cls, data: Any) -> "DialogState":
@@ -141,6 +145,7 @@ class DialogState:
             blocked_notice_sent=bool(data.get("blocked_notice_sent")),
             offered_slot=_slot(data.get("offered_slot")),
             follow_ups_sent=_str_list(data.get("follow_ups_sent"))[-MAX_FOLLOW_UPS_REMEMBERED:],
+            price_list_sent=data.get("price_list_sent") if isinstance(data.get("price_list_sent"), str) else None,
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -157,6 +162,7 @@ class DialogState:
             "blocked_notice_sent": self.blocked_notice_sent,
             "offered_slot": dict(self.offered_slot) if self.offered_slot else None,
             "follow_ups_sent": list(self.follow_ups_sent)[-MAX_FOLLOW_UPS_REMEMBERED:],
+            "price_list_sent": self.price_list_sent,
         }
 
     def pending_of(self, kind: str) -> list[dict[str, Any]]:

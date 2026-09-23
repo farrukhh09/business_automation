@@ -1079,6 +1079,12 @@ export interface BusinessSettings {
   daily_report_time: ISOTime;
   payment_methods_text: string;
   delivery_info_text: string;
+  /**
+   * Media file name of the price list picture the bot sends on a question about prices (03 §1.4).
+   * Set by `POST /settings/price-list-image`, never typed by hand; `null` — no picture, the bot
+   * answers with the price list as text.
+   */
+  price_list_image: string | null;
   /** Prepayment asked by the bot after the customer's "Да"; the receipt screenshot is read by the bot. */
   prepayment_enabled: boolean;
   /** 1..100 — share of the order total. */

@@ -185,10 +185,14 @@
 |---|---|---|---|
 | PUT | /settings | ADMIN | `BusinessSettings` (частичное обновление допустимо) → `BusinessSettings` |
 | GET | /settings/integrations | ADMIN | → `{instagram: IntegrationStatus, llm, stt, tts, geocoder, routing, maxim}`; `IntegrationStatus = {configured: bool, provider: string|null, details: string}` (без секретов) |
+| POST | /settings/price-list-image | ADMIN | `multipart{file}` → `BusinessSettings` |
+| DELETE | /settings/price-list-image | ADMIN | → `BusinessSettings` |
 
 `BusinessSettings = {business_name: "Домашняя выпечка", ai_enabled: true, voice_replies_enabled: false, warehouse: {name, address, latitude, longitude}, pickup_address: string, working_hours: string, order_hours_start: "HH:MM" | null, order_hours_end: "HH:MM" | null, closed_weekdays: [], min_order_quantity: 1, order_quantity_step: 1, min_lead_time_hours: 24, max_days_ahead: 60, follow_up_enabled: true, follow_up_after_hours: 3, delivery_time_window_minutes: 60, route_start_time: "09:00", service_time_minutes: 5, average_speed_kmh: 25, daily_report_time: "21:00", payment_methods_text: string, delivery_info_text: string, prepayment_enabled: false, prepayment_percent: 100, prepayment_wallet: string, prepayment_wallet_banks: string, prepayment_auto_confirm: false}`
 
 Предоплата (03 §3, 17.09.2026): `prepayment_wallet` — номер счёта, который бот называет после «Да» и в ответе об оплате: кошелёк-телефон или номер карты (13 цифр и больше — карта, и бот говорит «на карту»); `prepayment_wallet_banks` — где он принимается («Душанбе Сити, Алиф, Эсхата» или банк карты; пусто — бот не уточняет); `prepayment_percent` — доля суммы заказа (1..100); `prepayment_auto_confirm` — отмечать оплату по совпавшему чеку без сотрудника (по умолчанию `false`).
+
+Фото прайс-листа (03 §1.4, 23.09.2026): `price_list_image` — имя сохранённого медиафайла (`pl-….jpg`), которое бот отправляет картинкой на вопрос про цены и ассортимент. Руками это поле не заполняется: `POST /settings/price-list-image` принимает `multipart{file}` (JPEG или PNG, до 8 МБ — ограничение Instagram для картинки по ссылке, `docs/research/instagram.md`), сохраняет файл в `MEDIA_ROOT` под именем `pl-…`, удаляет предыдущий и возвращает обновлённые настройки; `DELETE` убирает фото и файл. Неподходящий файл — 422 `validation_error`. В `PUT /settings` явный `null` у `price_list_image` тоже убирает фото (как у часов выдачи).
 
 Догоняющие вопросы (03 §6a, 22.09.2026): `follow_up_enabled` — можно ли боту самому напомнить о себе, когда клиент замолчал на середине заказа; `follow_up_after_hours` — через сколько часов тишины (1..23). Верхняя граница — не вкус, а ограничение Instagram: через 24 часа окно ответа закрывается (06 §1), и отправить уже нечего.
 

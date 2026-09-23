@@ -115,6 +115,7 @@ class MessagingService:
         message_type: MessageType = MessageType.TEXT,
         user: User | None = None,
         audio_url: str | None = None,
+        media_url: str | None = None,
         ai_payload: dict[str, Any] | None = None,
     ) -> Message:
         """Store a PENDING outgoing message and commit (the caller enqueues the delivery)."""
@@ -125,6 +126,7 @@ class MessagingService:
             sender=sender,
             text=text,
             audio_url=audio_url,
+            media_url=media_url,
             ai_payload=ai_payload,
             delivery_status=MessageDeliveryStatus.PENDING,
             sent_by_user_id=user.id if user is not None else None,
@@ -247,6 +249,14 @@ class MessagingService:
                 raise ValueError("некорректная ссылка на аудио")
             url = self.media.public_url(filename, self.settings.PUBLIC_BASE_URL)
             return [messenger.send_audio(recipient, url)]
+        if message.message_type == MessageType.IMAGE and message.media_url:
+            # The price list picture (03 §1.4): Instagram downloads it from PUBLIC_BASE_URL, the
+            # same way it downloads a voice reply.
+            filename = self.media.filename_from_url(message.media_url)
+            if filename is None:
+                raise ValueError("некорректная ссылка на изображение")
+            url = self.media.public_url(filename, self.settings.PUBLIC_BASE_URL)
+            return [messenger.send_image(recipient, url)]
         return messenger.send_text(recipient, message.text or "")
 
     def _fail(self, message: Message, error: str) -> Message:

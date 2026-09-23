@@ -39,6 +39,7 @@ CONTRACT_KEYS = {
     "daily_report_time",
     "payment_methods_text",
     "delivery_info_text",
+    "price_list_image",
     "prepayment_enabled",
     "prepayment_percent",
     "prepayment_wallet",

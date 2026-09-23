@@ -247,6 +247,9 @@ _TEXTS: dict[str, dict[str, str]] = {
             "заказ, доставка или самовывоз?"
         ),
         "products_intro": "Вот что у нас есть:",
+        # The caption under the price list photo (03 §1.4): the picture is the list, so the text
+        # says only what a picture cannot — that the prices are per roll.
+        "price_list_photo": "Вот наш прайс-лист 📋 Цены за штуку.",
         "no_active_orders": "У вас сейчас нет активных заказов.",
         "order_status_line": "Заказ №{order_id}: {status}",
         "payment_line": "оплата: {payment}",
@@ -410,6 +413,7 @@ _TEXTS: dict[str, dict[str, str]] = {
             "худатон мегиред?"
         ),
         "products_intro": "Ана чӣ дорем:",
+        "price_list_photo": "Ана прайс-листи мо 📋 Нархҳо барои як дона.",
         "no_active_orders": "Ҳозир шумо фармоиши фаъол надоред.",
         "order_status_line": "Фармоиши №{order_id}: {status}",
         "payment_line": "пардохт: {payment}",
@@ -1015,7 +1019,11 @@ def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
     products = [product for product in facts.get("products") or [] if isinstance(product, Mapping)]
     if not products:
         return _with_reminder(_t(language, "need_manager"), facts, missing_fields, language)
-    if facts.get("asked_specific"):
+    if facts.get("price_list_photo"):
+        # The picture of the price list is sent just before this text (03 §1.4): the list itself is
+        # on it, so repeating twelve prices underneath would be the wall of text all over again.
+        body = _t(language, "price_list_photo")
+    elif facts.get("asked_specific"):
         # A question about named products ("что такое фисташковый?") — with the description.
         body = "\n".join(_product_line(product, language) for product in products)
     else:

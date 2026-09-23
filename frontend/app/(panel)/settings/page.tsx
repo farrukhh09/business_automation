@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { IntegrationsPanel } from "@/components/settings/IntegrationsPanel";
+import { PriceListImageField } from "@/components/settings/PriceListImageField";
 import { WarehouseMapField } from "@/components/settings/WarehouseMapField";
 import { SectionCard } from "@/components/shared";
 import { Button, ErrorState, Input, PageHeader, PageSpinner, Switch, TimeInput, useToast } from "@/components/ui";
@@ -451,6 +452,10 @@ export default function SettingsPage() {
               hint="Шаг количества: заказ будет кратен этому числу. Коробочки по 4 и по 6 — это минимум 4 и шаг 2. 1 — без ограничения"
             />
           </div>
+        </SectionCard>
+
+        <SectionCard title="Прайс-лист" description="Фото, которым бот отвечает на вопрос о ценах и ассортименте">
+          <PriceListImageField filename={data?.price_list_image ?? null} disabled={!isAdmin} />
         </SectionCard>
 
         <SectionCard title="Доставка и маршрут" description="Параметры окна доставки и построения маршрута">

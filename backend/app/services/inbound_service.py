@@ -354,6 +354,19 @@ class InboundMessageService:
     def _send_outcome(self, conversation: Conversation, outcome: DialogOutcome, incoming: Message | None) -> list[int]:
         if outcome.reply is None:
             return []
+        sent: list[int] = []
+        if outcome.image:
+            # The price list photo goes first and the reply is its caption (03 §1.4). It is a message
+            # of its own: if Instagram refuses the picture, the text still reaches the customer.
+            picture = self.messaging.create_outgoing(
+                conversation,
+                None,
+                sender=MessageSender.AI,
+                message_type=MessageType.IMAGE,
+                media_url=MediaStorage.url_path(outcome.image),
+            )
+            self.queue.send_message(picture.id)
+            sent.append(picture.id)
         reply = self._store_reply(conversation, outcome.reply)
         self.queue.send_message(reply.id)
         if (
@@ -362,7 +375,7 @@ class InboundMessageService:
             and SettingsService(self.db).get().voice_replies_enabled
         ):
             self.queue.synthesize_voice_reply(reply.id)
-        return [reply.id]
+        return [*sent, reply.id]
 
     def _store_reply(self, conversation: Conversation, reply: Reply) -> Message:
         return self.messaging.create_outgoing(

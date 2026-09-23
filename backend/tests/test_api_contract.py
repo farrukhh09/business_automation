@@ -72,6 +72,8 @@ CONTRACT_ENDPOINTS: tuple[tuple[str, str], ...] = (
     ("GET", "/api/settings"),
     ("PUT", "/api/settings"),
     ("GET", "/api/settings/integrations"),
+    ("POST", "/api/settings/price-list-image"),
+    ("DELETE", "/api/settings/price-list-image"),
     ("GET", "/api/webhooks/instagram"),
     ("POST", "/api/webhooks/instagram"),
     ("GET", "/api/public/location/{token}"),
@@ -101,6 +103,8 @@ ADMIN_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("DELETE", "/api/faq/{faq_id}"),
         ("PUT", "/api/settings"),
         ("GET", "/api/settings/integrations"),
+        ("POST", "/api/settings/price-list-image"),
+        ("DELETE", "/api/settings/price-list-image"),
     }
 )
 

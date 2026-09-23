@@ -238,6 +238,14 @@ export const settingsApi = {
   update: (body: BusinessSettingsUpdate) => http.put<BusinessSettings>("/settings", body),
   /** ADMIN */
   integrations: () => http.get<IntegrationsStatusOut>("/settings/integrations"),
+  /** ADMIN: фото прайс-листа, которое бот отправляет на вопрос про цены (JPEG или PNG, до 8 МБ) */
+  uploadPriceListImage: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return http.post<BusinessSettings>("/settings/price-list-image", form);
+  },
+  /** ADMIN */
+  deletePriceListImage: () => http.delete<BusinessSettings>("/settings/price-list-image"),
 };
 
 /* 13. Public location page (no auth) */

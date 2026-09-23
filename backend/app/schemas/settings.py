@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.core.config import get_settings
 from app.schemas.common import HHMM
 from app.services.constants import is_inside_tajikistan
+from app.services.media_storage import PRICE_LIST_NAME_PATTERN
 
 DEFAULT_BUSINESS_NAME = "Домашняя выпечка"
 DEFAULT_WAREHOUSE_NAME = "Склад"
@@ -100,6 +101,10 @@ class BusinessSettings(BaseModel):
     daily_report_time: HHMM = Field(default_factory=default_daily_report_time)
     payment_methods_text: str = Field(default="", max_length=LONG_TEXT_MAX)
     delivery_info_text: str = Field(default="", max_length=LONG_TEXT_MAX)
+    # The price list picture (03 §1.4, 23.09.2026): the name of a stored media file (``pl-….jpg``),
+    # which the bot sends on a question about prices or the assortment. It is written only by
+    # ``POST /settings/price-list-image`` — the panel uploads a picture, never types a name.
+    price_list_image: str | None = Field(default=None, pattern=PRICE_LIST_NAME_PATTERN)
     # Prepayment (03 §3, 17.09.2026): asked by the bot after the customer's "Да"; the receipt screenshot
     # is read by the bot and checked in Python; the operator confirms unless auto-confirm is switched on.
     prepayment_enabled: bool = False
@@ -165,6 +170,8 @@ class BusinessSettingsUpdate(BaseModel):
     daily_report_time: HHMM | None = None
     payment_methods_text: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
     delivery_info_text: str | None = Field(default=None, max_length=LONG_TEXT_MAX)
+    #: Only the upload endpoint sets this (a name it just saved) — ``PUT /settings`` leaves it out.
+    price_list_image: str | None = Field(default=None, pattern=PRICE_LIST_NAME_PATTERN)
     prepayment_enabled: bool | None = None
     prepayment_percent: int | None = Field(default=None, ge=1, le=100)
     prepayment_wallet: str | None = Field(default=None, max_length=SHORT_TEXT_MAX)

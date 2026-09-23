@@ -125,6 +125,8 @@ class InstagramMessenger(Protocol):
 
     def send_audio(self, recipient_id: str, url: str) -> str: ...
 
+    def send_image(self, recipient_id: str, url: str) -> str: ...
+
     def get_user_profile(self, igsid: str) -> dict[str, str | None] | None: ...
 
     def download_attachment(self, url: str, max_bytes: int = MAX_MEDIA_BYTES) -> tuple[bytes, str]: ...
@@ -391,6 +393,22 @@ class InstagramClient:
         message = {"attachment": {"type": "audio", "payload": {"url": url.strip()}}}
         message_id = self._send_message("send_audio", recipient, message)
         log_event(logger, "instagram.message_sent", kind="audio", recipient_id=recipient, parts=1)
+        return message_id
+
+    def send_image(self, recipient_id: str, url: str) -> str:
+        """Send a picture by public URL (jpeg/png, ≤ 8MB); returns the message id.
+
+        The docs word the payload both ways; ``attachments`` as a list is the form that covers one
+        picture and ten alike (docs/research/instagram.md §"Send API"), so it is the one used here.
+        """
+        self._require_configured(account=True)
+        recipient = _require_id(recipient_id, "recipient_id")
+        parts = _split_url(url)
+        if parts is None or parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("url must be a public http(s) URL")
+        message = {"attachments": [{"type": "image", "payload": {"url": url.strip()}}]}
+        message_id = self._send_message("send_image", recipient, message)
+        log_event(logger, "instagram.message_sent", kind="image", recipient_id=recipient, parts=1)
         return message_id
 
     # ------------------------------------------------------------------ User Profile API

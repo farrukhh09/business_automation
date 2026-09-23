@@ -700,6 +700,9 @@ class FakeMessenger:
     def send_audio(self, recipient_id: str, url: str) -> str:
         return "mid.fake"
 
+    def send_image(self, recipient_id: str, url: str) -> str:
+        return "mid.fake"
+
     def get_user_profile(self, igsid: str) -> dict[str, str | None] | None:
         return None
 
