@@ -214,10 +214,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "closed_day": "В {weekday} мы не работаем.",
         "closed_day_next": " Ближайший рабочий день — {weekday}, {date}.",
         "quantity_min": "Минимальный заказ — {min} шт.",
-        "quantity_step": "Заказ собираем коробочками по {step} шт., поэтому общее количество кратно {step}.",
+        # The step is not a box size once the bakery packs boxes of 4 *and* 6 (03 §1.3), so the rule
+        # is stated by the totals that fit it. What a box is, the FAQ says in the owner's own words.
+        "quantity_step": "Собираем заказ коробочками, поэтому по количеству подходят {examples} и так далее.",
         "quantity_choice": " Сейчас {total} — сделаем {lower} или {upper}?",
         "quantity_choice_up": " Сделаем {upper}?",
-        "packing_note": "В коробочке {step} шт. — можно собрать из разных вкусов, цена сложится из выбранных.",
+        "packing_note": (
+            "Заказ собираем коробочками от {min} шт. — подходят {examples} и так далее; "
+            "вкусы любые, цена складывается из выбранных."
+        ),
         "phone_invalid": (
             "Номер телефона не получилось распознать. Напишите, пожалуйста, в формате "
             f"{PHONE_EXAMPLE_NATIONAL} или {PHONE_EXAMPLE_INTERNATIONAL}."
@@ -372,11 +377,12 @@ _TEXTS: dict[str, dict[str, str]] = {
         "closed_day": "Рӯзи {weekday} кор намекунем.",
         "closed_day_next": " Рӯзи кории наздиктарин — {weekday}, {date}.",
         "quantity_min": "Фармоиши камтарин — {min} дона.",
-        "quantity_step": "Фармоишро қуттигӣ, {step}-донагӣ ҷамъ мекунем, барои ҳамин шумора ба {step} тақсим шавад.",
+        "quantity_step": "Фармоишро қуттигӣ ҷамъ мекунем, барои ҳамин {examples} ва ҳамин тавр мешавад.",
         "quantity_choice": " Ҳозир {total} шуд — {lower} ё {upper} кунем?",
         "quantity_choice_up": " {upper} кунем?",
         "packing_note": (
-            "Дар як қуттӣ {step} дона — аз таъмҳои гуногун ҷамъ кардан мумкин, нарх аз ҳамонҳо ҷамъ мешавад."
+            "Фармоишро қуттигӣ, аз {min} дона ҷамъ мекунем — {examples} ва ҳамин тавр мешавад; "
+            "таъмҳо ҳар хел, нарх аз ҳамонҳо ҷамъ мешавад."
         ),
         "phone_invalid": (
             f"Рақами телефонро нафаҳмидем. Дар шакли {PHONE_EXAMPLE_NATIONAL} ё {PHONE_EXAMPLE_INTERNATIONAL} нависед."
@@ -521,6 +527,13 @@ def _names(names: Sequence[Any]) -> str:
     return ", ".join(_text(name) for name in names if _text(name))
 
 
+def _number_series(values: Any) -> str:
+    """ "4, 6, 8, 10" — the allowed order totals, as the packing texts list them (03 §1.3)."""
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return ""
+    return ", ".join(str(int(value)) for value in values if isinstance(value, int) and not isinstance(value, bool))
+
+
 def _order_id(facts: Mapping[str, Any]) -> str:
     return _text(facts.get("order_id")) or "—"
 
@@ -636,11 +649,11 @@ def _closed_day(facts: Mapping[str, Any], language: str) -> str:
 
 
 def _quantity_note(facts: Mapping[str, Any], language: str) -> str:
-    """The packing rule: the minimum or the step, plus the two totals the customer can pick."""
+    """The packing rule: the minimum or the allowed totals, plus the two the customer can pick."""
     if facts.get("quantity_problem") == "quantity_below_min":
         note = _t(language, "quantity_min", min=_text(facts.get("quantity_min")) or "1")
     else:
-        note = _t(language, "quantity_step", step=_text(facts.get("quantity_step")) or "1")
+        note = _t(language, "quantity_step", examples=_number_series(facts.get("quantity_examples")))
     lower, upper = _text(facts.get("quantity_lower")), _text(facts.get("quantity_upper"))
     total = _text(facts.get("quantity_total"))
     if lower and upper and total:
@@ -952,11 +965,13 @@ def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
         return _with_reminder(_t(language, "need_manager"), facts, missing_fields, language)
     lines = "\n".join(_product_line(product, language) for product in products)
     body = lines if facts.get("asked_specific") else f"{_t(language, 'products_intro')}\n{lines}"
-    packing = _text(facts.get("packing_step"))
-    if packing:
+    packing_min = _text(facts.get("packing_min"))
+    if packing_min:
         # "Сколько стоит коробка?" is the commonest question of all: prices are per piece, so the
-        # answer has to say what a box is and that its price adds up (03 §1.3).
-        body += "\n" + _t(language, "packing_note", step=packing)
+        # answer has to say how the order is put together and that its price adds up (03 §1.3).
+        body += "\n" + _t(
+            language, "packing_note", min=packing_min, examples=_number_series(facts.get("packing_examples"))
+        )
     return _with_reminder(body, facts, missing_fields, language)
 
 

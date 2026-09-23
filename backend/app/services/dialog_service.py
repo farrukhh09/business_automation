@@ -146,8 +146,10 @@ from app.services.order_validator import (
     USABLE_GEOCODE_STATUSES,
     OrderValidator,
     allowed_quantities_around,
+    allowed_quantity_examples,
     next_open_day,
     order_quantity,
+    smallest_allowed_quantity,
 )
 from app.services.phone import normalize_phone
 from app.services.settings_service import SettingsService
@@ -750,9 +752,11 @@ class DialogService:
             facts.update({"unknown_products": unknown, "available_products": [_product_fact(p) for p in products]})
             return self._finish(turn, ReplyPlan(ReplyKind.UNKNOWN_PRODUCT, language, facts, fields))
         facts.update({"products": [_product_fact(p) for p in (asked or products)], "asked_specific": bool(asked)})
-        if turn.business.order_quantity_step > 1:
-            # Prices are per piece while the bakery sells boxes: "сколько стоит коробка?" needs the size.
-            facts["packing_step"] = turn.business.order_quantity_step
+        if turn.business.order_quantity_step > 1 or turn.business.min_order_quantity > 1:
+            # Prices are per piece while the bakery sells boxes: "сколько стоит коробка?" needs the
+            # rule — the smallest order and the totals that fit it (03 §1.3).
+            facts["packing_min"] = smallest_allowed_quantity(turn.business)
+            facts["packing_examples"] = allowed_quantity_examples(turn.business)
         return self._finish(turn, ReplyPlan(ReplyKind.PRODUCT_INFO, language, facts, fields))
 
     def _order_status(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
@@ -1411,6 +1415,7 @@ class DialogService:
         turn.notes["quantity_total"] = total
         turn.notes["quantity_step"] = turn.business.order_quantity_step
         turn.notes["quantity_min"] = turn.business.min_order_quantity
+        turn.notes["quantity_examples"] = allowed_quantity_examples(turn.business)
         turn.notes["quantity_lower"] = lower
         turn.notes["quantity_upper"] = upper
 

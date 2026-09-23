@@ -207,8 +207,37 @@ def test_five_pieces_are_answered_with_the_two_possible_totals(
 
     assert outcome.reply.kind == ReplyKind.ASK_MISSING  # not the summary
     reply = reply_text(outcome)
-    assert "кратно 4" in reply
+    # The rule is named by the totals that fit it, never by the step: with boxes of 4 and 6 the step
+    # is 2 and calling it a box size would be a lie (03 §1.3, 23.09.2026).
+    assert "подходят 4, 8, 12, 16 и так далее" in reply
     assert "Сейчас 5 — сделаем 4 или 8?" in reply
+
+
+@pytest.mark.usefixtures("frozen_now")
+def test_boxes_of_four_and_six_accept_every_even_total_from_four(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """23.09.2026: the bakery added boxes of 6, so 4 + 6 add up to 4, 6, 8, 10 … (minimum 4, step 2)."""
+    _packing(db, minimum=4, step=2)
+    text = "5 медовиков на 21 сентября к 14:00, самовывоз"
+    entities = {
+        "items": [item("медовик", 5, catalog["honey"].id)],
+        "delivery_date": MONDAY.isoformat(),
+        "delivery_time": "14:00",
+        "delivery_type": "PICKUP",
+    }
+    bot = Bot(db, make_conversation(), ScriptedLLM({text: understanding(intent="CREATE_ORDER", entities=entities)}))
+
+    reply = reply_text(bot.say(text))
+
+    assert "подходят 4, 6, 8, 10 и так далее" in reply
+    assert "Сейчас 5 — сделаем 4 или 6?" in reply
+
+    settings = BusinessSettings(min_order_quantity=4, order_quantity_step=2)
+    assert quantity_problem(6, settings) is None  # a box of six on its own
+    assert quantity_problem(10, settings) is None  # four and six together
+    assert quantity_problem(3, settings) == QUANTITY_BELOW_MIN
+    assert quantity_problem(7, settings) == QUANTITY_NOT_MULTIPLE
 
 
 @pytest.mark.usefixtures("frozen_now")
@@ -268,7 +297,7 @@ def test_a_price_question_says_how_big_a_box_is(
 
     reply = reply_text(bot.say(text))
 
-    assert "В коробочке 4 шт." in reply
+    assert "Заказ собираем коробочками от 4 шт. — подходят 4, 8, 12, 16 и так далее" in reply
 
 
 @pytest.mark.parametrize("language", ["ru", "tg"])

@@ -227,3 +227,20 @@ def allowed_quantities_around(total: int, settings: BusinessSettings) -> tuple[i
         return None, smallest
     lower = (total // step) * step
     return lower, lower + step
+
+
+#: How many allowed totals the explaining texts list ("4, 6, 8, 10 и так далее").
+QUANTITY_EXAMPLES = 4
+
+
+def allowed_quantity_examples(settings: BusinessSettings, count: int = QUANTITY_EXAMPLES) -> list[int]:
+    """The first totals the bakery accepts, for the texts that explain the packing rule (03 §1.3).
+
+    The rule is arithmetic — "at least ``min_order_quantity``, then every ``order_quantity_step``" —
+    and one box size cannot express it once the bakery packs boxes of several sizes: boxes of 4 and 6
+    add up to 4, 6, 8, 10 … (minimum 4, step 2). So the texts name the totals themselves instead of
+    calling the step a box; what a box is belongs to the FAQ, where the owner writes it in own words.
+    """
+    smallest = smallest_allowed_quantity(settings)
+    step = max(1, settings.order_quantity_step)
+    return [smallest + step * index for index in range(max(1, count))]

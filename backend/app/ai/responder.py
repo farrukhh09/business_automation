@@ -103,7 +103,16 @@ TEMPLATE_KINDS: frozenset[ReplyKind] = frozenset(
 #: products, a refused date/time, an invalid phone. Worded by the model in live dialogs they turned
 #: into invented counts ("какие ещё три?"), a "всё верно" instead of the question, and a repeated
 #: refusal of a date that had already been accepted (17.09.2026).
-EXACT_ASK_FACTS: tuple[str, ...] = ("pending_items", "unknown_products", "timing_problem", "phone_invalid")
+EXACT_ASK_FACTS: tuple[str, ...] = (
+    "pending_items",
+    "unknown_products",
+    "timing_problem",
+    "phone_invalid",
+    # 23.09.2026: asked to explain "5 штук нельзя", the model invented the boxes it is made of
+    # («коробочками по 2 или 4 штуки») from the step and the totals. The packing rule is arithmetic
+    # from the settings, and the template states it exactly (03 §1.3).
+    "quantity_problem",
+)
 
 
 class ReplySource(StrEnum):

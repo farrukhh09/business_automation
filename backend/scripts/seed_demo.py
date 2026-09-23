@@ -1,9 +1,9 @@
-"""Catalog, FAQ and business settings of the bakery for a local run (idempotent).
+﻿"""Catalog, FAQ and business settings of the bakery for a local run (idempotent).
 
 Usage (from ``backend/``, after ``alembic upgrade head``)::
 
     python -m scripts.seed_demo              # add what is missing
-    python -m scripts.seed_demo --refresh    # also rewrite the FAQ answers and settings from this set
+    python -m scripts.seed_demo --refresh    # also rewrite prices, FAQ answers and settings from this set
 
 Products and FAQ items are matched by name / question: existing rows are left as they are, so the
 script never overwrites what was edited in the admin panel (``--refresh`` is the exception, and it
@@ -18,10 +18,15 @@ the admin panel, because they are personal data this repository must not carry:
   prepayment and the payment text follow that switch, so turning it on brings them back;
 * the exact pin of the kitchen on the map («Настройки → Склад»), used for route optimization.
 
-The catalog is priced PER ROLL, the way the bakery quotes it ("Классический 10, ягодный, шоколадный,
-банановый и яблочный по 18, фисташковый 23"): a box is packaging for 4 rolls, not a product, and its
-price is the sum of what is inside it ("40+72+14 = 126"). The packing rule itself lives in the
-settings (``min_order_quantity`` / ``order_quantity_step`` = 4 — "у нас либо 4, либо 8").
+The catalog is priced PER ROLL, the way the bakery quotes it: a box is packaging, not a product, and
+its price is the sum of what is inside it ("40+72+14 = 126"). Since the owner's price list of
+23.09.2026 every flavour comes in two sizes, each with its own price — standard (10 / 18 / 23) and
+large (15 / 26 / 34) — so the large one is a product of its own, matched only when the customer says
+the size; a bare "классический" still means the standard roll.
+
+The packing rule lives in the settings: boxes of 4 and of 6 add up to every even total from 4 up,
+which is ``min_order_quantity = 4`` with ``order_quantity_step = 2``. The box sizes as such are named
+in the FAQ, where the owner can reword them.
 """
 
 import sys
@@ -62,6 +67,26 @@ def _roll(name: str, price: str, description: str, aliases: list[str]) -> dict[s
         "unit": PIECE_UNIT,
         "aliases": aliases,
     }
+
+
+#: How the customer names the large size (price list 23.09.2026: «стандартный» / «большой размер»).
+LARGE_WORDS: tuple[str, ...] = ("большой", "большая", "большие", "калон")
+
+
+def _large(name: str, price: str, description: str, flavours: list[str]) -> dict[str, Any]:
+    """The same flavour in the large size: a product of its own, because it has a price of its own.
+
+    A bare flavour word keeps meaning the standard roll — that is what every customer in the archive
+    means — so this one is matched only when the size is said: «классический большой», «калон».
+    ``flavours`` are the few core words of the flavour; both word orders are generated.
+
+    The name deliberately carries no word «синнамон»: a category word ("хочу 5 синнамонов") then
+    offers the six flavours to pick from instead of twelve rows where each flavour appears twice.
+    The full assortment with both sizes is still what a price question answers.
+    """
+    aliases = [f"{flavour} {size}" for flavour in flavours for size in LARGE_WORDS]
+    aliases += [f"{size} {flavour}" for flavour in flavours for size in LARGE_WORDS]
+    return _roll(name, price, description, aliases)
 
 
 PRODUCTS: list[dict[str, Any]] = [
@@ -167,6 +192,44 @@ PRODUCTS: list[dict[str, Any]] = [
             "пистагӣ",
         ],
     ),
+    # The large size, added 23.09.2026 from the owner's own price list («БОЛЬШОЙ РАЗМЕР»). Prices
+    # are per roll, as everywhere here: 15 / 26 / 26 / 26 / 26 / 34 сомони.
+    _large(
+        "Классический большой",
+        "15",
+        "Тот же классический синнамон, только большого размера.",
+        ["классический", "классика", "классикӣ"],
+    ),
+    _large(
+        "Шоколадный большой",
+        "26",
+        "Шоколадный синнамон большого размера.",
+        ["шоколадный", "шоколад", "шоколадӣ"],
+    ),
+    _large(
+        "Ягодный большой",
+        "26",
+        "Ягодный синнамон большого размера.",
+        ["ягодный", "ягода", "буттамева"],
+    ),
+    _large(
+        "Яблочный большой",
+        "26",
+        "Яблочный синнамон большого размера.",
+        ["яблочный", "яблоко", "себ"],
+    ),
+    _large(
+        "Банановый большой",
+        "26",
+        "Банановый синнамон большого размера.",
+        ["банановый", "банан", "бананӣ"],
+    ),
+    _large(
+        "Фисташковый большой",
+        "34",
+        "Фисташковый синнамон большого размера.",
+        ["фисташковый", "фисташка", "писта"],
+    ),
 ]
 
 BUSINESS_SETTINGS: dict[str, Any] = {
@@ -178,8 +241,10 @@ BUSINESS_SETTINGS: dict[str, Any] = {
     "order_hours_start": "09:00",
     "order_hours_end": "20:00",
     "closed_weekdays": [5, 6],
+    # Boxes of 4 and of 6 (23.09.2026): every total that adds up from them is an even number from 4
+    # up — which is exactly "minimum 4, step 2". The box sizes themselves are named in the FAQ.
     "min_order_quantity": 4,
-    "order_quantity_step": 4,
+    "order_quantity_step": 2,
     "min_lead_time_hours": 24,
     "delivery_info_text": (
         "Доставка по Худжанду — 14 сомони, привозит таксист. За город — по договорённости, "
@@ -211,23 +276,39 @@ def payment_methods_text(prepayment_enabled: bool) -> str:
     return PAYMENT_TEXT_PREPAID if prepayment_enabled else PAYMENT_TEXT_OFF
 
 
-def seed_products(db: Session) -> tuple[int, int]:
-    """Adds the per-roll catalog and switches off the boxes of 4 seeded earlier (if untouched)."""
+def seed_products(db: Session, refresh: bool = False) -> tuple[int, int, int]:
+    """Adds the per-roll catalog and switches off the boxes of 4 seeded earlier (if untouched).
+
+    ``refresh`` also brings an existing product back to this file — price, description, aliases —
+    which is how a new price list reaches the catalog (23.09.2026). Without it the prices a staff
+    member typed in the admin panel are never overwritten.
+    """
     existing = {product.name: product for product in db.scalars(select(Product))}
     service = ProductService(db)
-    created = 0
+    created = updated = 0
     for sort_order, data in enumerate(PRODUCTS, start=1):
-        if data["name"] in existing:
+        product = existing.get(data["name"])
+        if product is None:
+            service.create({**data, "sort_order": sort_order * 10})
+            created += 1
             continue
-        service.create({**data, "sort_order": sort_order * 10})
-        created += 1
+        changes = {
+            key: value
+            for key, value in (("price", data["price"]), ("description", data["description"]))
+            if getattr(product, key) != value
+        }
+        if list(product.aliases or []) != data["aliases"]:
+            changes["aliases"] = data["aliases"]
+        if refresh and changes:
+            service.update(product.id, changes)
+            updated += 1
     retired = 0
     for name in RETIRED_PRODUCT_NAMES:
         product = existing.get(name)
         if product is not None and product.is_active and product.price == RETIRED_BOX_PRICE:
             service.update(product.id, {"is_active": False})
             retired += 1
-    return created, retired
+    return created, updated, retired
 
 
 def seed_faq(db: Session, refresh: bool = False) -> tuple[int, int, int]:
@@ -310,11 +391,14 @@ def seed_settings(db: Session, refresh: bool = False) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     refresh = "--refresh" in (argv if argv is not None else sys.argv[1:])
     with session_scope() as db:
-        products, retired_products = seed_products(db)
+        products, products_updated, retired_products = seed_products(db, refresh=refresh)
         faq, faq_updated, faq_retired = seed_faq(db, refresh=refresh)
         settings = seed_settings(db, refresh=refresh)
         prepayment_enabled = SettingsService(db).get().prepayment_enabled
-    print(f"Товаров добавлено: {products} (всего в наборе {len(PRODUCTS)}), отключено старых: {retired_products}")
+    print(
+        f"Товаров добавлено: {products}, обновлено: {products_updated} "
+        f"(всего в наборе {len(PRODUCTS)}), отключено старых: {retired_products}"
+    )
     print(f"Предоплата: {'включена' if prepayment_enabled else 'выключена'} — ответы про оплату следуют за ней")
     print(
         f"Вопросов FAQ добавлено: {faq}, обновлено: {faq_updated}, отключено: {faq_retired} "

@@ -448,7 +448,7 @@ export default function SettingsPage() {
               onChange={(event) => update("order_quantity_step", event.target.value)}
               disabled={disabled}
               error={errors.order_quantity_step}
-              hint="Сколько штук в коробочке: заказ будет кратен этому числу. 1 — без ограничения"
+              hint="Шаг количества: заказ будет кратен этому числу. Коробочки по 4 и по 6 — это минимум 4 и шаг 2. 1 — без ограничения"
             />
           </div>
         </SectionCard>

@@ -1,5 +1,7 @@
 """Demo data of ``scripts.seed_demo`` / ``scripts.faq_data`` stays valid for the admin API and idempotent."""
 
+from decimal import Decimal
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -29,9 +31,9 @@ def test_faq_entries_are_valid_and_bilingual() -> None:
 
 
 def test_seed_is_idempotent_and_refreshes_untouched_faq(db: Session) -> None:
-    assert seed_products(db) == (len(PRODUCTS), 0)  # (created, retired)
+    assert seed_products(db) == (len(PRODUCTS), 0, 0)  # (created, updated, retired)
     assert seed_faq(db) == (len(FAQ), 0, 0)  # (created, updated, retired)
-    assert seed_products(db) == (0, 0)
+    assert seed_products(db) == (0, 0, 0)
     assert seed_faq(db) == (0, 0, 0)
     assert db.scalar(select(func.count()).select_from(Product)) == len(PRODUCTS)
 
@@ -90,6 +92,52 @@ def test_payment_text_follows_the_switch(db: Session) -> None:
     SettingsService(db).update({"payment_methods_text": owners_own})
     seed_settings(db)
     assert SettingsService(db).get().payment_methods_text == owners_own  # an edited text stays the owner's
+
+
+#: The owner's price list of 23.09.2026: «СТАНДАРТНЫЙ РАЗМЕР» / «БОЛЬШОЙ РАЗМЕР», сомони per roll.
+PRICE_LIST = [
+    ("Классический синнамон", "10", "Классический большой", "15"),
+    ("Ягодный синнамон", "18", "Ягодный большой", "26"),
+    ("Шоколадный синнамон", "18", "Шоколадный большой", "26"),
+    ("Яблочный синнамон", "18", "Яблочный большой", "26"),
+    ("Банановый синнамон", "18", "Банановый большой", "26"),
+    ("Фисташковый синнамон", "23", "Фисташковый большой", "34"),
+]
+
+
+def test_the_catalog_matches_the_owners_price_list() -> None:
+    """Both sizes of every flavour, priced exactly as the price list prints them."""
+    by_name = {product["name"]: product for product in PRODUCTS}
+    for standard_name, standard_price, large_name, large_price in PRICE_LIST:
+        assert by_name[standard_name]["price"] == Decimal(standard_price), standard_name
+        assert by_name[large_name]["price"] == Decimal(large_price), large_name
+    assert len(PRODUCTS) == 2 * len(PRICE_LIST)
+
+
+def test_a_category_word_offers_the_flavours_once() -> None:
+    """ "Хочу 5 синнамонов" must offer six flavours, not twelve rows: only the standard rolls carry
+    the category word, so the large ones join the answer only when the size is asked for."""
+    category = {product["name"] for product in PRODUCTS if "синнамон" in normalize_fold(product["name"])}
+    assert category == {standard for standard, _, _, _ in PRICE_LIST}
+    for product in PRODUCTS:
+        if product["name"] in category:
+            continue
+        assert not any("синнамон" in normalize_fold(alias) for alias in product["aliases"]), product["name"]
+
+
+def test_a_bare_flavour_word_means_the_standard_roll() -> None:
+    """The large roll is matched only when the size is said — otherwise every old order would change
+    its price. Aliases must not collide: an alias of two products makes the exact match ambiguous."""
+    seen: dict[str, str] = {}
+    for product in PRODUCTS:
+        for alias in product["aliases"]:
+            key = normalize_fold(alias)
+            assert key not in seen, f"«{alias}» есть и у «{seen.get(key)}», и у «{product['name']}»"
+            seen[key] = product["name"]
+    assert seen[normalize_fold("классический")] == "Классический синнамон"
+    assert seen[normalize_fold("классический большой")] == "Классический большой"
+    assert seen[normalize_fold("большой классический")] == "Классический большой"
+    assert seen[normalize_fold("фисташка калон")] == "Фисташковый большой"
 
 
 def test_products_are_priced_per_piece(db: Session) -> None:
