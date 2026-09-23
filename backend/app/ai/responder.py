@@ -154,6 +154,11 @@ def uses_template(plan: ReplyPlan) -> bool:
         return True
     if plan.kind == ReplyKind.SMALL_TALK:
         return plan.facts.get("small_talk") in ("ack", "done")
+    if plan.kind == ReplyKind.PRODUCT_INFO and not plan.facts.get("asked_specific"):
+        # The whole price list is a table — every flavour in two sizes with two prices. Worded by
+        # the model it grows into a wall of text and invents sizes (23.09.2026), so the template
+        # prints it; a question about one named product is still worded by the model.
+        return True
     return plan.kind == ReplyKind.ASK_MISSING and any(plan.facts.get(key) for key in EXACT_ASK_FACTS)
 
 

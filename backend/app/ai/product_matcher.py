@@ -12,7 +12,8 @@ Matching stages (first hit wins):
 1. **Exact** — the normalized + Tajik-folded text equals a product name or alias.
 2. **Generic category word** — "торт", "торты", "пирожное", "десерт", "торти", "синнамоны",
    "синабоны": all products whose name or aliases contain that stem or its synonym (``NONE`` when the
-   catalog has none); "2 коробки" — all products sold by the box (unit "кор.").
+   catalog has none); "2 коробки" — all products sold by the box (unit "кор."); a description of the
+   order that names no flavour at all ("стандартная коробка", "микс со всеми вкусами") — everything.
 3. **Fuzzy** — containment ("медовик" inside "хочу медовик на завтра", "бархат" inside
    "Красный бархат"), token coverage, and ``difflib`` ratio ≥ :data:`FUZZY_THRESHOLD` for
    typos.  Candidates within :data:`CANDIDATE_MARGIN` of the best score are all reported, so a
@@ -34,11 +35,13 @@ from app.ai.text_normalize import normalize_fold
 __all__ = [
     "CANDIDATE_MARGIN",
     "CATEGORY_STEMS",
+    "DESCRIPTOR_STEMS",
     "FUZZY_THRESHOLD",
     "MatchResult",
     "MatchStatus",
     "ProductMatcher",
     "is_generic_mention",
+    "is_mix_mention",
     "split_item_mentions",
 ]
 
@@ -52,10 +55,15 @@ class MatchStatus(StrEnum):
 
 @dataclass(frozen=True)
 class MatchResult:
-    """``candidates`` are product ids, best first; empty for ``NONE``."""
+    """``candidates`` are product ids, best first; empty for ``NONE``.
+
+    ``generic`` says the text named a group and not a product ("синнамоны", "коробка", "микс"):
+    several candidates are then a choice to offer ("какие именно?"), not an ambiguity to resolve.
+    """
 
     status: MatchStatus
     candidates: list[Any] = field(default_factory=list)
+    generic: bool = False
 
     @property
     def product_id(self) -> Any | None:
@@ -110,10 +118,35 @@ CATEGORY_SYNONYMS = {
     "булочк": "синнамон",
     "кориц": "синнамон",
 }
+#: Words that describe the order without naming a flavour: "микс", "ассорти", "стандартная коробка",
+#: "все вкусы", "разные".  They name the whole catalog, never "такого товара нет в каталоге" — the
+#: customer asked for a box, not for a product called "стандартная коробка" (dialog #3, 23.09.2026).
+#: "обычный" is deliberately absent: it is an alias of the classic roll, so it names a flavour.
+DESCRIPTOR_STEMS = (
+    "микс",
+    "ассорт",
+    "стандарт",
+    "разн",
+    "любы",
+    "любо",
+    "вкус",
+    "все",
+    "вся",
+    # tg: "ҳама" (all), "омехта" (mixed), "ҳар хел" (different), "маза" (taste)
+    "хама",
+    "омехта",
+    "хархел",
+    "гуногун",
+    "маза",
+    "мазза",
+)
 #: A packaging word asks for the products sold in it: "2 коробки" → every product with the unit "кор.".
 #: When nothing is sold by that unit — a catalog priced per piece — the word still names no flavour,
 #: so :meth:`ProductMatcher._match_category` offers the whole catalog instead of answering "нет такого".
 PACKAGING_UNITS = dict.fromkeys(("короб", "каропк", "коропк", "каробк", "кутти", "бокс"), "кор")
+#: Words about the shape of the order rather than about a flavour: after them the answer is "какие
+#: именно?", never "такого товара нет" — whatever else the customer wrote around them.
+_ORDER_SHAPE_STEMS = tuple(PACKAGING_UNITS) + DESCRIPTOR_STEMS
 
 # Words around a category word that carry no product information ("хочу 2 торта на завтра").
 _MENTION_STOPWORDS = frozenset(
@@ -163,6 +196,7 @@ _MENTION_STOPWORDS = frozenset(
         "ночью",
         "на",
         "для",
+        "из",
         "в",
         "к",
         "с",
@@ -209,11 +243,32 @@ def _content_tokens(text: str | None) -> list[str]:
 def is_generic_mention(text: str | None) -> bool:
     """True for "торт", "2 торта", "торты", "десерт", "торти" — a category, not a product.
 
+    A description of the order counts too ("стандартная коробка", "микс со всеми вкусами"): it
+    names no flavour either, so the answer is "какие именно?" and not "такого товара нет".
+
     ``DialogService`` uses this to tell "какие именно торты?" (SPEC §11, 05 §5.7.2
     ``pending_items``) from "такого товара нет в каталоге".
     """
     tokens = _content_tokens(text)
-    return bool(tokens) and all(token.startswith(CATEGORY_STEMS) for token in tokens)
+    return bool(tokens) and all(token.startswith(CATEGORY_STEMS + DESCRIPTOR_STEMS) for token in tokens)
+
+
+#: One word is enough for a mix; "все"/"разные" need the thing they are all of ("все вкусы").
+_MIX_STEMS = ("микс", "ассорт", "омехта", "гуногун", "хархел")
+_MIX_ALL = ("все", "вся", "разн", "любы", "любо", "хама")
+_MIX_OF = ("вкус", "маза", "мазза", "синнамон", "синамон", "синнабон", "синабон", "булочк")
+
+
+def is_mix_mention(text: str | None) -> bool:
+    """True for "микс", "ассорти", "все вкусы", "разные вкусы" — one of every flavour (03 §1.3).
+
+    The customer is not naming a product but the way the box is put together, so ``DialogService``
+    assembles it from the flavours instead of asking "какие именно?" (dialog #3, 23.09.2026).
+    """
+    tokens = normalize_fold(text).split()
+    if any(token.startswith(_MIX_STEMS) for token in tokens):
+        return True
+    return any(token.startswith(_MIX_ALL) for token in tokens) and any(token.startswith(_MIX_OF) for token in tokens)
 
 
 @dataclass(frozen=True)
@@ -310,7 +365,13 @@ class ProductMatcher:
             return self._match_category(query_tokens)
 
         # 3. Containment / token coverage / typos.
-        return self._match_fuzzy(query, query_tokens)
+        result = self._match_fuzzy(query, query_tokens)
+        if result.status is MatchStatus.NONE and any(token.startswith(_ORDER_SHAPE_STEMS) for token in query_tokens):
+            # "обычная стандартная коробка из 6 шт": the other words name nothing in the catalog, but
+            # a box is still a box — ask which flavours instead of "такого товара нет". A flavour that
+            # really is missing ("синнамон с малиной") has no such word and is still answered honestly.
+            return self._match_category(query_tokens)
+        return result
 
     def _match_category(self, query_tokens: list[str]) -> MatchResult:
         stems = {stem for stem in CATEGORY_STEMS for token in query_tokens if token.startswith(stem)}
@@ -321,15 +382,16 @@ class ProductMatcher:
             for entry in self._entries
             if any(stem in entry.haystack for stem in names) or any(entry.unit.startswith(unit) for unit in units)
         ]
-        if not candidates and stems and stems <= set(PACKAGING_UNITS):
-            # Only packaging was named ("сколько стоит коробка?", "1 каропка") and nothing is priced by
-            # the box: every flavour is sold in one, so ask which — never "такого товара нет".
+        if not candidates and stems <= set(PACKAGING_UNITS):
+            # Only packaging or a description was named ("сколько стоит коробка?", "стандартная
+            # коробка", "микс со всеми вкусами") and nothing is priced by the box: every flavour is
+            # sold in one, so ask which — never "такого товара нет".
             candidates = [entry.product_id for entry in self._entries]
         if not candidates:
             return MatchResult(MatchStatus.NONE)
         # One cake in the catalog is not a question worth asking.
         status = MatchStatus.SINGLE if len(candidates) == 1 else MatchStatus.MULTIPLE
-        return MatchResult(status, candidates)
+        return MatchResult(status, candidates, generic=True)
 
     def _match_fuzzy(self, query: str, query_tokens: list[str]) -> MatchResult:
         scored: list[tuple[float, int, Any]] = []

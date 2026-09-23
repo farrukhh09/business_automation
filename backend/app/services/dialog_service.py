@@ -38,6 +38,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.ai.catalog import flavour_bases
 from app.ai.confirmation import (
     ConfirmationDecision,
     classify_cancel_confirmation,
@@ -48,7 +49,7 @@ from app.ai.confirmation import (
 from app.ai.handoff import detect_operator_request, detect_our_fault
 from app.ai.language import detect_language
 from app.ai.llm_client import LLMClient, LLMError, get_llm_client
-from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention
+from app.ai.product_matcher import MatchStatus, ProductMatcher, is_generic_mention, is_mix_mention
 from app.ai.receipt import (
     MIN_CONFIDENCE,
     EarlierReceipt,
@@ -1125,10 +1126,15 @@ class DialogService:
                 match = matcher.match(text)
                 if match.product_id is not None:
                     product = by_id.get(match.product_id)
+                elif (mix := _mix_items(text, mention, state, products, position)) is not None:
+                    resolved.extend(mix)
+                    continue
                 elif match.status == MatchStatus.MULTIPLE:
                     new_pending.append(
                         {
-                            "kind": PENDING_GENERIC if is_generic_mention(text) else PENDING_AMBIGUOUS,
+                            # ``match.generic``: the text named a group, whatever words stood around
+                            # it ("Обычная стандартная коробка") — the question is "какие именно?"
+                            "kind": PENDING_GENERIC if match.generic or is_generic_mention(text) else PENDING_AMBIGUOUS,
                             "product_text": text,
                             "quantity": mention.quantity,
                             "product_id": None,
@@ -1136,6 +1142,9 @@ class DialogService:
                             "options": [candidate for candidate in match.candidates if candidate in by_id],
                             "comment": mention.comment,
                             "position": position,
+                            # a mix the bot could not assemble (no count, or it does not divide):
+                            # then the question is not "какие именно?" but "сколько штук?" (03 §1.3)
+                            "mix": is_mix_mention(text),
                         }
                     )
                     continue
@@ -1658,6 +1667,7 @@ class DialogService:
                     # the unit decides the wording of "how many?": "Сколько коробочек" for boxes
                     "unit": products[entry["product_id"]].unit if entry.get("product_id") in products else None,
                     "options": [products[option].name for option in entry.get("options") or [] if option in products],
+                    "mix": bool(entry.get("mix")),
                 }
                 for entry in turn.state.pending_items
             ]
@@ -1926,6 +1936,51 @@ def _quantity_answer(state: DialogState, mentions: list[Any], matcher: ProductMa
         return None
     product_id = pending[0].get("product_id")
     return product_id if product_id is not None and product_id in matcher.match(text).candidates else None
+
+
+def _pending_total(state: DialogState) -> int | None:
+    """The count a pending "какие именно?" is still waiting for ("коробка из 6 шт" → 6)."""
+    for entry in reversed(state.pending_items):
+        if entry["kind"] != PENDING_GENERIC:
+            continue
+        try:
+            total = int(entry.get("quantity"))
+        except (TypeError, ValueError):
+            continue
+        if total > 0:
+            return total
+    return None
+
+
+def _mix_items(
+    text: str, mention: Any, state: DialogState, products: list[Product], position: int
+) -> list[dict[str, Any]] | None:
+    """ "Микс со всеми вкусами" → one of every flavour, when the total divides evenly (03 §1.3).
+
+    The customer is describing how the box is put together, not naming a product, so the bot builds
+    it instead of asking "какие именно?" (dialog #3, 23.09.2026). The count comes from the message
+    itself ("микс из 6 штук") or from the question still open ("коробка из 6 шт" → "можно микс?").
+    Sizes are not mixed: a mix is made of the standard rolls, the large ones are asked for by name.
+    Without a count, or when it does not divide evenly, this returns ``None`` and the bot asks which
+    flavours — "6 на 4 вкуса" is the customer's choice to make, not ours.
+    """
+    if not is_mix_mention(text):
+        return None
+    flavours = flavour_bases(products)
+    total = mention.quantity or _pending_total(state)
+    if len(flavours) < 2 or not total or total % len(flavours):
+        return None
+    each = total // len(flavours)
+    return [
+        {
+            "product_id": product.id,
+            "name": product.name,
+            "quantity": each,
+            "comment": mention.comment,
+            "position": position,
+        }
+        for product in flavours
+    ]
 
 
 def _split_totals(pending: list[dict[str, Any]], resolved: list[dict[str, Any]]) -> list[dict[str, Any]]:

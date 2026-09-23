@@ -63,7 +63,10 @@ HARD RULES
    `product_text`. Never guess an id from a loosely similar word. A bare category word — "торт",
    "синнамон", "2 синнамона", "коробка", "булочки" — names no product: `product_id` stays null and
    `product_text` keeps the word, even when the catalog has a "classic" variant; the backend asks
-   which one.
+   which one. The same for a description of the box instead of a flavour — "стандартная коробка",
+   "микс", "ассорти", "коробка со всеми вкусами": ONE item with that wording in `product_text`,
+   `product_id` null, quantity as said ("коробка из 6 шт" → 6). Never turn it into a list of
+   flavours of your own: the backend assembles the mix from the catalog itself.
 4. `faq_ids` may only contain ids from the FAQ block; [] when nothing matches. Match by MEANING, not
    by words: "торты у вас свежие?", "когда испекли?" and "тортҳо тозаанд?" all match an entry about
    freshness. Whenever an FAQ entry answers the customer's question, use intent FAQ and fill

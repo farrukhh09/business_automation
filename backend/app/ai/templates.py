@@ -21,6 +21,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.ai.catalog import flavour_groups, flavour_names
 from app.ai.receipt import is_card_number
 from app.ai.small_talk import Greeting
 from app.services.formatting import format_amount, format_date_ru
@@ -190,12 +191,17 @@ _TEXTS: dict[str, dict[str, str]] = {
         "clarify_intro": "Уточните, пожалуйста:",
         "recorded": "Записали: {items}.",
         "pending_generic": "Подскажите, пожалуйста, какие именно? Сейчас есть: {options}.",
+        "pending_mix": "Микс соберём из любых вкусов: {options}. Сколько штук нужно?",
         "pending_generic_more": "Подскажите, пожалуйста, какие ещё {quantity} выбрать? Сейчас есть: {options}.",
         "pending_ambiguous": "Уточните, пожалуйста, какой именно товар вы имели в виду: {options}?",
         "pending_quantity": "Сколько штук нужно: {names}?",
         "pending_quantity_boxes": "Сколько коробочек нужно: {names}?",
         "unknown_products": "К сожалению, {names} нет в нашем каталоге.",
         "available_products": "Сейчас можно заказать: {names}.",
+        # The catalog by flavour: both prices on one line, the sizes explained once underneath
+        # (the owner, 23.09.2026 — twelve rows with a description each are a wall of text).
+        "size_price": ", {size} — {price}",
+        "sizes_note": "Первая цена — стандартный размер, вторая — {sizes}.",
         "too_soon": (
             "Заказы принимаем не позднее чем за {hours} ч.{earliest} Выберите, пожалуйста, другую дату или время."
         ),
@@ -355,12 +361,15 @@ _TEXTS: dict[str, dict[str, str]] = {
         "clarify_intro": "Илтимос, аниқ кунед:",
         "recorded": "Навиштем: {items}.",
         "pending_generic": "Кадомашро мегиред? Ҳозир дорем: {options}.",
+        "pending_mix": "Миксро аз ҳар мазза ҷамъ мекунем: {options}. Чандто лозим?",
         "pending_generic_more": "Боз кадомашро мегиред ({quantity})? Ҳозир дорем: {options}.",
         "pending_ambiguous": "Кадомашро дар назар доред: {options}?",
         "pending_quantity": "Чандто лозим: {names}?",
         "pending_quantity_boxes": "Чанд қуттӣ лозим: {names}?",
         "unknown_products": "Мебахшед, {names} дар мо нест.",
         "available_products": "Ҳозир инҳо ҳастанд: {names}.",
+        "size_price": ", {size} — {price}",
+        "sizes_note": "Нархи якум — андозаи стандартӣ, дуюмаш — {sizes}.",
         "too_soon": ("Фармоишро камаш {hours} соат пештар қабул мекунем.{earliest} Рӯз ё соати дигарро интихоб кунед."),
         "too_soon_same_day": "Барои {day} — на барвақттар аз соати {time}.",
         "earliest": " Аз ҳама барвақт — {when}.",
@@ -569,17 +578,30 @@ def _item_notes(facts: Mapping[str, Any], language: str) -> list[str]:
     """Pending item questions, unknown products, timing and phone problems (asked before fields)."""
     notes: list[str] = []
     unknown = facts.get("unknown_products") or []
+    asks_which = any(
+        pending.get("kind") == "generic" and pending.get("options") for pending in facts.get("pending_items") or []
+    )
     if unknown:
         notes.append(_t(language, "unknown_products", names=_quoted(unknown)))
         available = facts.get("available_products") or []
-        if available:
-            notes.append(_t(language, "available_products", names=_names([_product_name(p) for p in available])))
+        # "какие именно?" below lists the very same catalog — once per message is enough
+        # (dialog #3, 23.09.2026: the customer got the twelve names twice in one reply).
+        if available and not asks_which:
+            names = flavour_names([_product_name(product) for product in available])
+            notes.append(_t(language, "available_products", names=_names(names)))
     recorded = _recorded_items(facts)
     for pending in facts.get("pending_items") or []:
         kind = pending.get("kind")
-        options = _names(pending.get("options") or [])
+        names = [_text(option) for option in pending.get("options") or []]
+        # "какие именно?" is a question about the flavour, so the sizes of one flavour are one
+        # option; "какой именно товар?" is exactly the question of which of the two it was.
+        options = _names(flavour_names(names) if kind == "generic" else names)
         quantity = _text(pending.get("quantity"))
-        if kind == "generic" and options and recorded and quantity:
+        if kind == "generic" and options and pending.get("mix") and not quantity:
+            # A mix with no count: the flavours are settled ("все"), the number is what is missing.
+            # Asking "какие именно?" here sends the customer round the same circle (dialog #3).
+            notes.append(_t(language, "pending_mix", options=options))
+        elif kind == "generic" and options and recorded and quantity:
             # "5 синнамонов, 3 ягодных": the 3 are written down — the question is about the 2 more.
             notes.append(_t(language, "pending_generic_more", quantity=quantity, options=options))
         elif kind == "generic" and options:
@@ -949,22 +971,58 @@ def _text_block(value: Any) -> str:
     return "\n".join(line.strip() for line in str(value).strip().splitlines())
 
 
-def _product_line(product: Mapping[str, Any], language: str) -> str:
+def _product_line(product: Mapping[str, Any], language: str, *, description: bool = True) -> str:
     name = _text(product.get("name"))
     price = _money(product.get("price"), language)
     unit = _unit(product.get("unit"), language)
     line = f"{name} — {price} / {unit}" if price else name
-    description = _text(product.get("description"))
+    text = _text(product.get("description")) if description else ""
     # "/ кор." already ends with a period: "— 100 сомони / кор. Коробочка из 4…", not "кор.. Коробочка"
-    return f"{line.removesuffix('.')}. {description}" if description else line
+    return f"{line.removesuffix('.')}. {text}" if text else line
+
+
+#: The size words of the catalog as a Tajik text says them («большой размер» → «калон»).
+_SIZE_TG: dict[str, str] = {"большой": "калон", "большая": "калон", "большие": "калон"}
+
+
+def _size_word(size: str, language: str) -> str:
+    word = size.strip().lower()
+    return _SIZE_TG.get(word, word) if language == TG else word
+
+
+def _catalog_lines(products: Sequence[Mapping[str, Any]], language: str) -> tuple[list[str], list[str]]:
+    """The whole catalog by flavour: "Классический синнамон — 10 сомони / шт, большой — 15 сомони".
+
+    Descriptions are left out here — the list is read to pick a flavour and a size, and a dozen
+    rows with a sentence each is the wall of text the owner asked us to stop sending (03 §1.4).
+    """
+    lines: list[str] = []
+    sizes: list[str] = []
+    for group in flavour_groups(products):
+        line = _product_line(group.base, language, description=False)
+        for size, variant in group.variants:
+            price = _money(variant.get("price"), language)
+            if price:
+                label = _size_word(size, language)
+                # "10 сомони / шт." already ends the line: "/ шт, большой — 15", not "шт., большой"
+                line = line.removesuffix(".") + _t(language, "size_price", size=label, price=price)
+                sizes.append(label)
+        lines.append(line)
+    return lines, list(dict.fromkeys(sizes))
 
 
 def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], language: str) -> str:
     products = [product for product in facts.get("products") or [] if isinstance(product, Mapping)]
     if not products:
         return _with_reminder(_t(language, "need_manager"), facts, missing_fields, language)
-    lines = "\n".join(_product_line(product, language) for product in products)
-    body = lines if facts.get("asked_specific") else f"{_t(language, 'products_intro')}\n{lines}"
+    if facts.get("asked_specific"):
+        # A question about named products ("что такое фисташковый?") — with the description.
+        body = "\n".join(_product_line(product, language) for product in products)
+    else:
+        lines, sizes = _catalog_lines(products, language)
+        body = f"{_t(language, 'products_intro')}\n" + "\n".join(lines)
+        if sizes:
+            body += "\n" + _t(language, "sizes_note", sizes=_names(sizes))
     packing_min = _text(facts.get("packing_min"))
     if packing_min:
         # "Сколько стоит коробка?" is the commonest question of all: prices are per piece, so the

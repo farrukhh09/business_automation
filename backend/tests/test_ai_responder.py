@@ -233,7 +233,10 @@ def test_template_kinds_never_reach_the_llm() -> None:
 def test_llm_wording_is_used_when_the_guard_accepts_it() -> None:
     llm = ScriptedLLM(reply="Здравствуйте! Медовик стоит 750 сомони 😊")
     responder = Responder(llm, catalog_names=["Медовик", "Наполеон"])
-    plan = ReplyPlan(ReplyKind.PRODUCT_INFO, "ru", {"products": [{"name": "Медовик", "price": "750.00"}]})
+    # a question about one named product — the whole price list is always a template (05 §6)
+    plan = ReplyPlan(
+        ReplyKind.PRODUCT_INFO, "ru", {"products": [{"name": "Медовик", "price": "750.00"}], "asked_specific": True}
+    )
 
     reply = responder.generate_reply(plan)
 
@@ -256,13 +259,15 @@ def test_llm_wording_is_used_when_the_guard_accepts_it() -> None:
 def test_guard_violation_falls_back_to_the_template(llm_text: str, violation: str) -> None:
     responder = Responder(ScriptedLLM(reply=llm_text), catalog_names=["Медовик", "Наполеон"])
     plan = ReplyPlan(
-        ReplyKind.PRODUCT_INFO, "ru", {"products": [{"name": "Медовик", "price": "750.00", "unit": "шт."}]}
+        ReplyKind.PRODUCT_INFO,
+        "ru",
+        {"products": [{"name": "Медовик", "price": "750.00", "unit": "шт."}], "asked_specific": True},
     )
 
     reply = responder.generate_reply(plan)
 
     assert reply.source == ReplySource.FALLBACK
-    assert reply.text == "Вот что у нас есть:\nМедовик — 750 сомони / шт."
+    assert reply.text == "Медовик — 750 сомони / шт."
     assert any(item.startswith(violation) for item in reply.violations), reply.violations
 
 
@@ -357,7 +362,12 @@ def test_mixed_language_and_foreign_script_fall_back(language: str, llm_text: st
     plan = ReplyPlan(
         ReplyKind.PRODUCT_INFO,
         language,
-        {"products": [{"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "слоёные коржи"}]},
+        {
+            "products": [
+                {"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "слоёные коржи"}
+            ],
+            "asked_specific": True,
+        },
     )
     reply = responder.generate_reply(plan)
     assert reply.source == ReplySource.FALLBACK
@@ -370,7 +380,10 @@ def test_proper_tajik_reply_with_russian_product_name_passes() -> None:
     plan = ReplyPlan(
         ReplyKind.PRODUCT_INFO,
         "tg",
-        {"products": [{"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "1,5 кг"}]},
+        {
+            "products": [{"name": "Торт «Наполеон»", "price": "200.00", "unit": "шт.", "description": "1,5 кг"}],
+            "asked_specific": True,
+        },
     )
     reply = responder.generate_reply(plan)
     assert reply.source == ReplySource.LLM, reply.violations

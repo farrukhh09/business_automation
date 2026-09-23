@@ -36,6 +36,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.catalog import SIZE_WORDS
 from app.core.database import session_scope
 from app.models.faq import FaqItem
 from app.models.product import Product
@@ -70,7 +71,8 @@ def _roll(name: str, price: str, description: str, aliases: list[str]) -> dict[s
 
 
 #: How the customer names the large size (price list 23.09.2026: «стандартный» / «большой размер»).
-LARGE_WORDS: tuple[str, ...] = ("большой", "большая", "большие", "калон")
+#: The same words group the catalog by flavour in the bot's texts, so there is one list of them.
+LARGE_WORDS: tuple[str, ...] = SIZE_WORDS
 
 
 def _large(name: str, price: str, description: str, flavours: list[str]) -> dict[str, Any]:
