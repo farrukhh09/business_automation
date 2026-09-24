@@ -177,7 +177,8 @@ def test_model_small_talk_is_answered_without_a_failed_attempt(
 ) -> None:
     bot = Bot(db, make_conversation(), ScriptedLLM(default=understanding(intent="OTHER", other_topic="small_talk")))
 
-    outcome = bot.say("как дела?")
+    # "как дела?" itself is answered without the model since 24.09.2026 (SmallTalk.HOW)
+    outcome = bot.say("хорошая сегодня погода")
 
     assert outcome.reply.kind == ReplyKind.SMALL_TALK and not outcome.handoff
     assert reply_text(outcome).startswith("Мы «Синнамоны»")

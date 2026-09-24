@@ -245,6 +245,7 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Заказ собираем коробочками от {min} шт. — подходят {examples} и так далее; "
             "вкусы любые, цена складывается из выбранных."
         ),
+        "packing_example": " Например, {quantity} шт. «{name}» — {total}.",
         "phone_invalid": (
             "Номер телефона не получилось распознать. Напишите, пожалуйста, в формате "
             f"{PHONE_EXAMPLE_NATIONAL} или {PHONE_EXAMPLE_INTERNATIONAL}."
@@ -260,6 +261,12 @@ _TEXTS: dict[str, dict[str, str]] = {
         "small_talk_ack": "Хорошо 👍 Если что-то понадобится — пишите.",
         "small_talk_ping": "Да, мы здесь 😊",
         "small_talk_ping_question": "Подскажите, что вас интересует?",
+        "small_talk_confused": "Извините, если написали непонятно 🙂",
+        "small_talk_how": "Спасибо, всё хорошо 🙂",
+        "small_talk_who": (
+            "Я помощник пекарни «Синнамоны» 🙂 Подскажу по вкусам, ценам и доставке и оформлю заказ, "
+            "а если понадобится — подключится менеджер."
+        ),
         "small_talk_chat": (
             "Мы «Синнамоны» — премиальные синнамон-роллы в Худжанде 😊 Подскажите, чем можем помочь: "
             "заказ, доставка или самовывоз?"
@@ -431,6 +438,7 @@ _TEXTS: dict[str, dict[str, str]] = {
             "Фармоишро қуттигӣ, аз {min} дона ҷамъ мекунем — {examples} ва ҳамин тавр мешавад; "
             "таъмҳо ҳар хел, нарх аз ҳамонҳо ҷамъ мешавад."
         ),
+        "packing_example": " Масалан, {quantity} дона «{name}» — {total}.",
         "phone_invalid": (
             f"Рақами телефонро нафаҳмидем. Дар шакли {PHONE_EXAMPLE_NATIONAL} ё {PHONE_EXAMPLE_INTERNATIONAL} нависед."
         ),
@@ -445,6 +453,12 @@ _TEXTS: dict[str, dict[str, str]] = {
         "small_talk_ack": "Хуб 👍 Агар чизе лозим шавад, нависед.",
         "small_talk_ping": "Ҳа, мо ҳастем 😊",
         "small_talk_ping_question": "Чӣ лозим, нависед?",
+        "small_talk_confused": "Мебахшед, агар нофаҳмо навишта бошем 🙂",
+        "small_talk_how": "Раҳмат, нағз 🙂",
+        "small_talk_who": (
+            "Ман ёрдамчии «Синнамоны» ҳастам 🙂 Дар бораи таъмҳо, нарх ва доставка мегӯям ва фармоиш қабул "
+            "мекунам, лозим шавад — менеҷер ҳам пайваст мешавад."
+        ),
         "small_talk_again": (
             "Мо дар алоқаем 🙂 Нависед, чӣ лозим: дар бораи таъмҳо ва нарх мегӯем ё фармоиш қабул мекунем."
         ),
@@ -993,6 +1007,9 @@ def _small_talk(facts: Mapping[str, Any], missing_fields: Sequence[str], languag
         "ack": "small_talk_ack",
         "done": "small_talk_ack",
         "ping": "small_talk_ping",
+        "confused": "small_talk_confused",
+        "how": "small_talk_how",
+        "who": "small_talk_who",
     }.get(kind, "small_talk_chat")
     reminder = _reminder(facts, missing_fields, language)
     if facts.get("again"):
@@ -1000,8 +1017,9 @@ def _small_talk(facts: Mapping[str, Any], missing_fields: Sequence[str], languag
         return _paragraphs(_t(language, again), reminder)
     if kind in ("ack", "done") and reminder:
         return reminder
-    if kind == "ping":
-        # "Алло?" / "вы тут?": we are here — and the open question again, or "what can we do?".
+    if kind in ("ping", "confused", "how"):
+        # "Алло?" / "вы тут?": we are here; "не понял" / "что?": sorry — and the open question
+        # again, or "what can we do?".
         return f"{_t(language, key)} {reminder or _t(language, 'small_talk_ping_question')}"
     return _paragraphs(_t(language, key), reminder)
 
@@ -1126,6 +1144,13 @@ def _product_info(facts: Mapping[str, Any], missing_fields: Sequence[str], langu
         body += "\n" + _t(
             language, "packing_note", min=packing_min, examples=_number_series(facts.get("packing_examples"))
         )
+        example = facts.get("packing_example")
+        total = _money(example.get("total"), language) if isinstance(example, Mapping) else None
+        if total:
+            body += _t(
+                language, "packing_example", quantity=_text(example.get("quantity")), name=_text(example.get("name")),
+                total=total,
+            )
     return _info("\n".join([*missing, body]), facts, missing_fields, language)
 
 

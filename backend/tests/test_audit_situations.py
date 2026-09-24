@@ -767,3 +767,265 @@ def test_prices_in_side_answers_pass_the_guard() -> None:
 
     facts = {"answers": {"delivery_info": "Доставка по Худжанду — 14 сомони."}}
     assert Decimal("14") in fact_amounts(facts)
+
+
+# --------------------------------------------------------------------------- the rest of the archive (24.09.2026)
+
+
+@pytest.mark.parametrize(
+    ("text", "talk"),
+    [
+        ("Извините, что?)", SmallTalk.CONFUSED),
+        ("не понял", SmallTalk.CONFUSED),
+        ("в смысле?", SmallTalk.CONFUSED),
+        ("нафахмидам", SmallTalk.CONFUSED),
+        ("понятно", SmallTalk.ACK),  # "не понятно" is confusion, "понятно" is not
+        ("Shumo nagzmi?", SmallTalk.HOW),
+        ("Шумо нағз ми", SmallTalk.HOW),
+        ("как дела?", SmallTalk.HOW),
+        ("Вас как зовут?", SmallTalk.WHO),
+        ("вы бот?", SmallTalk.WHO),
+        ("как вы работаете?", SmallTalk.NONE),  # a real question, not small talk
+    ],
+)
+def test_the_archive_s_small_talk(text: str, talk: SmallTalk) -> None:
+    assert detect_small_talk(text) is talk
+
+
+def test_confused_how_and_who_are_answered_without_the_model(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    llm = ScriptedLLM()
+    bot = Bot(db, make_conversation(), llm)
+
+    assert reply_text(bot.say("Извините, что?)")) == (
+        "Извините, если написали непонятно 🙂 Подскажите, что вас интересует?"
+    )
+    assert reply_text(bot.say("как дела?")).startswith("Спасибо, всё хорошо 🙂")
+    assert reply_text(bot.say("Shumo nagzmi?")).startswith("Раҳмат, нағз 🙂")  # Tajik in Latin letters
+    assert reply_text(bot.say("Вас как зовут?")).startswith("Я помощник пекарни «Синнамоны» 🙂")
+    assert llm.json_calls == [] and llm.text_calls == []  # nothing spent on the model
+
+
+@pytest.mark.parametrize("text", ["4шт 69с?", "А классические получается 40 сом?", "Донаш чанд сом"])
+def test_a_price_named_to_be_confirmed_is_a_price_question(text: str) -> None:
+    from app.services.dialog_service import _price_question  # noqa: PLC0415
+
+    assert _price_question(text)
+
+
+@pytest.mark.parametrize("text", ["Дс есть?", "Ман пулаша DC кунам ми", "А Душанбе Сити не пойдёт?"])
+def test_the_dushanbe_city_wallet_is_a_payment_question(text: str) -> None:
+    from app.services.dialog_service import _payment_topic  # noqa: PLC0415
+
+    assert _payment_topic(text)
+
+
+def test_a_flavour_named_without_the_model_gets_its_price_but_an_order_does_not(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    from app.ai.llm_client import LLMUnavailableError  # noqa: PLC0415
+
+    bot = Bot(db, make_conversation(), ScriptedLLM(default=LLMUnavailableError(reason="rate_limit")))
+
+    assert reply_text(bot.say("медовик?")).startswith("Медовик — 750 сомони / шт.")
+    assert bot.say("хочу 2 медовика на завтра").handoff  # an order needs the model: the manager takes it
+
+
+def test_the_price_list_says_what_the_smallest_box_costs(
+    db: Session, rolls: list[Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """The owner's commonest answer in the archive: «40 сомон за коробку классических, в коробке 4 шт»."""
+    SettingsService(db).update({"min_order_quantity": 4, "order_quantity_step": 2})
+    bot = Bot(db, make_conversation(), ScriptedLLM(default=understanding(intent="PRODUCT_QUERY")))
+
+    text = reply_text(bot.say("Сколько стоит коробка?"))
+
+    assert "Например, 4 шт. «Классический синнамон» — 40 сомони." in text
+
+
+def test_the_answer_about_today_is_not_given_to_a_question_about_tomorrow(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    """Archive replay: «На завтра 1 коробку возможно?» got «На сегодня, к сожалению, не получится»."""
+    today = FaqItem(
+        question="Можно ли заказать на сегодня?", answer="На сегодня не получится.", keywords=["на сегодня"]
+    )
+    one_box = FaqItem(question="Можно одну коробку?", answer="Да, можно и одну коробочку.")
+    db.add_all([today, one_box])
+    db.commit()
+    llm = ScriptedLLM(default=understanding(intent="FAQ", faq_ids=[today.id, one_box.id]))
+    bot = Bot(db, make_conversation(), llm)
+
+    assert reply_text(bot.say("На завтра 1 коробку возможно будет организовать?")) == "Да, можно и одну коробочку."
+    assert "На сегодня не получится." in reply_text(bot.say("А на сегодня нельзя?"))
+
+
+def test_while_payment_is_off_no_faq_answers_a_payment_question(
+    db: Session, make_conversation: Callable[..., Conversation]
+) -> None:
+    """Archive replay: «Сразу оплата кунамми? Алифми эсхата хайми» got the "today" answer by its keyword."""
+    today = FaqItem(question="Можно ли заказать на сегодня?", answer="Барои имрӯз намешавад.", keywords=["хайми"])
+    db.add(today)
+    db.commit()
+    bot = Bot(db, make_conversation(), ScriptedLLM(default=understanding(intent="PAYMENT_QUERY", language="tg")))
+
+    assert reply_text(bot.say("Сразу оплата кунамми? Алифми эсхата хайми")) == (
+        "Инро аз менеҷер мепурсам ва ба шумо менависам."
+    )
+
+
+def test_what_is_there_is_the_price_list_even_when_read_as_small_talk(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Archive replay: «Чихел хаст» (what is there?) was read as small talk."""
+    llm = ScriptedLLM(default=understanding(intent="OTHER", other_topic="small_talk", language="tg"))
+    bot = Bot(db, make_conversation(), llm)
+
+    assert "Медовик — 750 сомонӣ" in reply_text(bot.say("Чихел хаст"))
+
+
+def test_all_one_each_on_trial_is_a_mix(
+    db: Session, rolls: list[Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Archive replay: «Можно все по одной на пробу» — the model kept only "все"; it is one of each."""
+    text = "Можно все по одной на пробу"
+    llm = ScriptedLLM(
+        {text: understanding(intent="CREATE_ORDER", entities={"items": [item("все")], "items_mode": "add"})}
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    bot.say(text)
+
+    assert sorted(line.quantity for line in bot.draft().items) == [1] * 6
+
+
+@pytest.mark.parametrize("pistachio_id", [False, True], ids=["mix-text", "model-took-the-excluded-one"])
+def test_one_of_each_except_a_flavour_leaves_it_out(
+    db: Session, rolls: list[Product], make_conversation: Callable[..., Conversation], pistachio_id: bool
+) -> None:
+    """Archive replay: «Можно по одному виду кроме фисташкового» got "у нас нет"."""
+    text = "Можно по одному виду кроме фисташкового"
+    product_id = rolls[-1].id if pistachio_id else None
+    llm = ScriptedLLM(
+        {
+            text: understanding(
+                intent="CREATE_ORDER", entities={"items": [item(text, product_id=product_id)], "items_mode": "add"}
+            )
+        }
+    )
+    bot = Bot(db, make_conversation(), llm)
+
+    answer = reply_text(bot.say(text))
+
+    assert "у нас нет" not in answer
+    names = sorted(line.product.name for line in bot.draft().items)
+    assert "Фисташковый синнамон" not in names and len(names) == 5
+    assert all(line.quantity == 1 for line in bot.draft().items)
+
+
+def test_a_wish_without_something_is_not_an_exclusion(
+    db: Session, rolls: list[Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    text = "4 классический синнамон без глазури"
+    mention = item("классический синнамон без глазури", 4)
+    llm = ScriptedLLM({text: understanding(intent="CREATE_ORDER", entities={"items": [mention], "items_mode": "add"})})
+    bot = Bot(db, make_conversation(), llm)
+
+    bot.say(text)
+
+    assert [(line.product.name, line.quantity) for line in bot.draft().items] == [("Классический синнамон", 4)]
+
+
+@pytest.mark.parametrize(
+    ("text", "asked"),
+    [("К додо пицца вынесите, да?", ["пицца"]), ("Garmakak mefisonidmi?", ["garmakak"])],
+    ids=["a-landmark-of-our-address", "latin-letters"],
+)
+def test_words_that_are_not_food_questions_are_never_unknown_products(
+    db: Session,
+    catalog: dict[str, Product],
+    make_conversation: Callable[..., Conversation],
+    text: str,
+    asked: list[str],
+) -> None:
+    """Archive replay: the pickup landmark «Додо пицца» got "«пицца» у нас нет", a Latin transliteration
+    of "горячие?" got "«garmakak» у нас нет"."""
+    SettingsService(db).update({"pickup_address": "Худжанд, 12 мкр, напротив Додо пицца"})
+    llm = ScriptedLLM({text: understanding(intent="DELIVERY_QUERY", products_asked_text=asked)})
+    bot = Bot(db, make_conversation(), llm)
+
+    assert "у нас нет" not in reply_text(bot.say(text))
+
+
+@pytest.mark.parametrize(
+    ("text", "readings"),
+    [
+        ("Garmakak mefisonidmi ?", ["гармакак мефисонидми"]),
+        ("Pryam garmakak huram", ["прям гармакак хурам"]),
+        ("kujo mojno", ["кучо мочно", "кужо можно"]),
+        ("Салом", []),
+        ("Instagram created this chat because a user commented on your post.", []),
+    ],
+)
+def test_latin_letters_are_read_as_cyrillic(text: str, readings: list[str]) -> None:
+    from app.ai.text_normalize import latin_readings  # noqa: PLC0415
+
+    assert latin_readings(text) == readings
+
+
+@pytest.mark.parametrize(
+    ("text", "understood", "expected"),
+    [
+        # the owner's answer: «Прям с печки»; Tajik in Latin letters is answered in Tajik
+        ("Garmakak mefisonidmi ?", understanding(intent="PRODUCT_QUERY"), "ҳатто гарм мерасанд"),
+        ("К додо пицца вынесите, да?", understanding(intent="OTHER", other_topic="question"), "«Додо пицце»"),
+        (
+            "Ассалому алейкум. Соати чандба тайёр мешад?",
+            understanding(intent="OTHER", other_topic="question", language="tg"),
+            "соати 13:00–14:00",
+        ),
+    ],
+    ids=["warm-in-latin-letters", "the-pickup-landmark", "when-ready-is-not-today"],
+)
+def test_the_owner_s_keywords_answer_what_the_model_did_not_place(
+    db: Session,
+    catalog: dict[str, Product],
+    make_conversation: Callable[..., Conversation],
+    text: str,
+    understood: dict,
+    expected: str,
+) -> None:
+    from scripts.seed_demo import seed_faq  # noqa: PLC0415
+
+    seed_faq(db)
+    SettingsService(db).update({"pickup_address": "Гульбахор, остановка Гульбахор, у «Додо пиццы»"})
+    bot = Bot(db, make_conversation(), ScriptedLLM({text: understood}))
+
+    answer = reply_text(bot.say(text))
+
+    assert expected in answer and "у менеджера" not in answer
+    assert "Барои имрӯз" not in answer and "На сегодня" not in answer
+
+
+def test_the_customer_s_own_address_is_not_a_question_about_ours(
+    db: Session, catalog: dict[str, Product], make_conversation: Callable[..., Conversation]
+) -> None:
+    """Archive replay: «Давайте тогда скину адрес, самая последняя доставка хорошо?» got the pickup point."""
+    from scripts.seed_demo import seed_faq  # noqa: PLC0415
+
+    seed_faq(db)
+    text = "Давайте тогда скину адрес , самая последняя доставка хорошо?"
+    bot = Bot(db, make_conversation(), ScriptedLLM({text: understanding(intent="DELIVERY_QUERY")}))
+
+    assert "Гульбахор" not in reply_text(bot.say(text))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [("по одному виду кроме фисташкового", True), ("по одному вкусу", True), ("по одной штуке", False)],
+)
+def test_one_of_each_kind_is_a_mix(text: str, expected: bool) -> None:
+    from app.ai.product_matcher import is_mix_mention  # noqa: PLC0415
+
+    assert is_mix_mention(text) is expected

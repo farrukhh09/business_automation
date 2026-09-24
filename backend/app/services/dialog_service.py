@@ -78,7 +78,7 @@ from app.ai.receipt import (
 from app.ai.responder import Reply, ReplyKind, ReplyPlan, Responder, uses_template
 from app.ai.small_talk import Greeting, SmallTalk, detect_greeting, detect_small_talk
 from app.ai.templates import MAX_QUESTIONS, render
-from app.ai.text_normalize import normalize_fold
+from app.ai.text_normalize import latin_readings, normalize_fold
 from app.ai.tools import ToolContext, ToolRegistry, product_view, tool_definitions
 from app.ai.understanding import (
     MAX_QUANTITY,
@@ -222,7 +222,10 @@ ASSIST_REASON_PREFIXES: tuple[str, ...] = (
 _PRICE_RE = re.compile(
     r"\b(?:цен[аыуеой]?|ценник\w*|стоит(?!\s+(?:ли|брать|того|попробовать))|стоят|стоимост\w*|почем|прайс\w*|"
     r"сколько\s+будет|нарх\w*|кимат\w*|"
-    r"чанд?\s*пул\w*|чанд?\s*с[уо]м\w*|чанба|чандба|донаш\s+чанд?)\b"
+    # "соати чанба" is "at what hour", not "for how much" (archive, 24.09.2026)
+    r"чанд?\s*пул\w*|чанд?\s*с[уо]м\w*|(?<!соати )чанба|(?<!соати )чандба|донаш\s+чанд?|чанд?\s+ба\s+мешад|"
+    # "4шт 69с?", "А классические получается 40 сом?" — a price named to be confirmed (archive, 24.09)
+    r"\d+\s*(?:сом\w*|смн)|\d+с)\b"
 )
 
 _BARE_NUMBER_RE = re.compile(
@@ -754,10 +757,26 @@ class DialogService:
         known, unknown = self._asked_products(turn, result)
         if unknown or known:
             return self._product_query(turn, result, language)
+        named = self._named_products(turn)
+        if named:
+            # "фисташковый?" — the price of what was named. Not for an order ("4 фисташковых на
+            # завтра"): its data needs the model, so that one goes to the manager.
+            result = result.model_copy(update={"intent": Intent.PRODUCT_QUERY, "product_ids_asked": named})
+            turn.result = result
+            return self._product_query(turn, result, language)
         items = self._faq_items(result, turn.text)
         if items:
             return self._faq_answer(turn, result, language, items=items)
         return None
+
+    def _named_products(self, turn: _Turn) -> list[int]:
+        """Catalog products a short question names without the model ("фисташковый?"), or ``[]`` when
+        the message looks like an order (a number, "хочу", "закажу", "мегирам") or names a group."""
+        folded = normalize_fold(turn.text)
+        if any(char.isdigit() for char in folded) or _ORDER_WORDS_RE.search(folded):
+            return []
+        match = ProductMatcher(self._catalog(turn)).match(turn.text)
+        return [] if match.status == MatchStatus.NONE or match.generic else list(match.candidates)
 
     def _assist_silent(self, turn: _Turn) -> DialogOutcome:
         """Nothing the bot may say while the manager is being waited for: the message waits for them."""
@@ -818,6 +837,10 @@ class DialogService:
         if self._asks_about_products(turn, result, intent):
             # "а пирожки вы печёте?" read as OTHER or as a greeting: a question about products is
             # answered from the catalog — "такого у нас нет" included — never by the manager.
+            return self._product_query(turn, result, language)
+        if intent == Intent.OTHER and _asks_which(turn.text) and _ASSORTMENT_RE.search(normalize_fold(turn.text)):
+            # "Чихел хаст?" (what is there?) read as small talk (archive replay, 24.09.2026): a "which"
+            # question about the assortment is the price list's, whatever the model called it.
             return self._product_query(turn, result, language)
         if intent == Intent.OTHER and result.other_topic is OtherTopic.SMALL_TALK:
             return self._small_talk(turn, "chat", language)
@@ -1003,9 +1026,24 @@ class DialogService:
             known = sized_products(products, turn.text)
             if not known:
                 unknown = off_catalog_mentions(turn.text, matcher)
-        known, unknown = list(dict.fromkeys(known)), _unique_words([word.lower() for word in unknown])
+        known = list(dict.fromkeys(known))
+        unknown = [word for word in _unique_words([word.lower() for word in unknown]) if self._may_be_food(turn, word)]
         turn.asked = (result, known, unknown)
         return known, unknown
+
+    def _may_be_food(self, turn: _Turn, word: str) -> bool:
+        """Is this word worth a "такого у нас нет"? Not a word of our own address or delivery text —
+        «К додо пицца вынесите?» names the pickup landmark, not a pizza — and not a word in Latin
+        letters: the model writes products in Cyrillic (prompt rule 14), so "garmakak" is a Tajik word
+        it failed to read ("warm"), not a product (archive replay, 24.09.2026)."""
+        folded = normalize_fold(word)
+        if not folded or re.search(r"[a-z]", folded):
+            return False
+        business = turn.business
+        own_texts = normalize_fold(
+            " ".join((business.pickup_address, business.delivery_info_text, business.working_hours))
+        )
+        return not any(token[:4] in own_texts for token in folded.split() if len(token) >= 4)
 
     def _faq_first(self, turn: _Turn, result: UnderstandingResult, intent: Intent | None = None) -> list[FaqItem]:
         """A question the FAQ answers is answered from the FAQ, whatever intent the model chose.
@@ -1070,6 +1108,16 @@ class DialogService:
             # rule — the smallest order and the totals that fit it (03 §1.3).
             facts["packing_min"] = smallest_allowed_quantity(turn.business)
             facts["packing_examples"] = allowed_quantity_examples(turn.business)
+            if not asked:
+                # "Сколько стоит коробка?" answered the way the owner does in Direct: «40 сомон за
+                # коробку классических, в коробке 4 шт» — the cheapest flavour, the smallest box,
+                # computed from the catalog so it follows every price change (archive, 24.09.2026).
+                cheapest = min(flavour_bases(products), key=lambda product: product.price)
+                facts["packing_example"] = {
+                    "name": cheapest.name,
+                    "quantity": facts["packing_min"],
+                    "total": f"{money(cheapest.price * facts['packing_min']):.2f}",
+                }
         return self._finish(turn, ReplyPlan(ReplyKind.PRODUCT_INFO, language, facts, fields))
 
     def _price_list_photo(self, turn: _Turn) -> bool:
@@ -1131,12 +1179,12 @@ class DialogService:
     def _payment_query(self, turn: _Turn, result: UnderstandingResult, language: str) -> DialogOutcome:
         methods = turn.business.payment_methods_text.strip() or None
         prepayment = self._prepayment(turn)
-        # With payment switched off only the owner's own keywords may bring an FAQ answer: the model's
-        # choice then is the nearest entry it can find, which is about something else (03 §3).
-        chosen = result.model_copy(update={"faq_ids": []}) if methods is None and prepayment is None else result
-        faq = [_faq_fact(item, language) for item in self._faq_items(chosen, turn.text)]
-        if methods is None and not faq and prepayment is None:
+        if methods is None and prepayment is None:
+            # Payment switched off (03 §3): the payment answers of the FAQ are off with it, so any other
+            # entry is the wrong one — the model's nearest guess ("в первый раз всегда так") or a
+            # keyword that happened to match ("Алифми эсхата хайми" → «на сегодня нельзя»).
             return self._need_manager(turn, language)
+        faq = [_faq_fact(item, language) for item in self._faq_items(result, turn.text)]
         facts, fields = self._reminder(turn)
         facts.update({"payment_methods": methods, "faq": faq, "prepayment": prepayment})
         return self._finish(turn, ReplyPlan(ReplyKind.PAYMENT_INFO, language, facts, fields))
@@ -1335,17 +1383,18 @@ class DialogService:
         by_id = {item.id: item for item in active}
         chosen = [by_id[faq_id] for faq_id in result.faq_ids if faq_id in by_id]
         if not keywords:
-            return chosen
-        padded = f" {normalize_fold(text)} "
+            return _not_about_today(chosen, text)
+        # "Garmakak mefisonidmi?" is "гармакак" to the owner's keywords (archive replay, 24.09.2026)
+        padded = " | ".join(f" {reading} " for reading in [normalize_fold(text), *latin_readings(text)])
         matched: list[tuple[FaqItem, bool]] = []
         for item in active:
             keys = [key for keyword in item.keywords or [] if (key := normalize_fold(keyword)) and f" {key} " in padded]
             if keys:
                 matched.append((item, any(len(key.split()) > 1 for key in keys)))
         if not chosen and keywords != "phrases":
-            return [item for item, _ in matched]
+            return _not_about_today([item for item, _ in matched], text)
         extra = [item for item, phrase in matched if phrase and item not in chosen]
-        return (chosen + extra)[:MAX_FAQ_ANSWERS]
+        return _not_about_today((chosen + extra)[:MAX_FAQ_ANSWERS], text)
 
     def _reminder(self, turn: _Turn) -> tuple[dict[str, Any], list[str]]:
         """An open draft keeps being asked about while the customer asks something else."""
@@ -1492,11 +1541,14 @@ class DialogService:
                 product = None
             if product is None and quantity_answer is not None:
                 product = by_id.get(quantity_answer)  # "2 коробки" answers "Сколько коробочек: Шоколадные?"
+            if product is not None and product.id in _excepted_ids(products, turn.text):
+                # "по одному виду кроме фисташкового": the flavour named is the one left out, not the one wanted
+                product, text = None, turn.text
             if product is None:
                 match = matcher.match(text)
-                if match.product_id is not None:
+                if match.product_id is not None and not _excepting_mix(text):
                     product = by_id.get(match.product_id)
-                elif (mix := _mix_items(text, mention, state, products, position)) is not None:
+                elif (mix := _mix_items(_mix_text(text, turn.text), mention, state, products, position)) is not None:
                     resolved.extend(mix)
                     continue
                 elif is_mix_mention(text) and mention.quantity is None and (open_ := _open_generic(state)):
@@ -2395,6 +2447,9 @@ def _asks_which(text: str) -> bool:
     return any(f" {word} " in padded for word in WHICH_WORDS)
 
 
+#: Words of an order: without the model such a message is the manager's, never a price answer.
+_ORDER_WORDS_RE = re.compile(r"\b(?:хочу|хотим|закаж\w*|заказ\w*|запиш\w*|оформ\w*|мегирам|мехохам|лозим|дайте)\b")
+
 #: Words that make a "какие…?" a question about the assortment: "какие вкусы?", "что есть?", "кадом намуд?".
 _ASSORTMENT_RE = re.compile(
     r"\b(?:вкус\w*|вид\w*|есть|ассортимент\w*|синнамон\w*|синамон\w*|булочк\w*|намуд\w*|хаст\w*|доред|бор)\b"
@@ -2402,13 +2457,32 @@ _ASSORTMENT_RE = re.compile(
 
 _PAYMENT_RE = re.compile(
     r"\b(?:предоплат\w*|оплат\w*|оплачу|оплачивать|заплат\w*|наличн\w*|наличк\w*|перевод\w*|переведу|перевести|"
-    r"картой|карточк\w*|пардохт\w*|пешпардохт\w*|накд|алиф\w*|эсхат\w*|аванс\w*|задат\w*)\b"
+    r"картой|карточк\w*|пардохт\w*|пешпардохт\w*|накд|алиф\w*|эсхат\w*|аванс\w*|задат\w*|"
+    # "Дс есть?", "Ман пулаша DC кунам ми" — the Dushanbe City wallet (archive, 24.09)
+    r"дс|диси|dc|душанбе\s+сити)\b"
 )
 
 
 def _payment_topic(text: str) -> bool:
     """"Предоплата нужна?", "можно наличными?", "переводом можно?", "пардохт" — a payment question."""
     return _PAYMENT_RE.search(normalize_fold(text)) is not None
+
+
+_TODAY_RE = re.compile(r"\b(?:сегодня|щас|сейчас|имруз|хозир|хозер|баного)\b")
+_OTHER_DAY_RE = re.compile(
+    r"\b(?:завтра|послезавтра|пагох|пага|пасфардо|басфардо|фардо|понедельник\w*|вторник\w*|сред[уа]|четверг\w*|"
+    r"пятниц\w*|суббот\w*|воскресень\w*|душанбе|сешанбе|чоршанбе|панчшанбе|чумъа|шанбе|якшанбе)\b"
+)
+
+
+def _not_about_today(items: list[FaqItem], text: str) -> list[FaqItem]:
+    """Without the answers about ordering for today when the message is about another day: «На завтра
+    1 коробку возможно?» got «На сегодня, к сожалению, не получится» (archive replay, 24.09.2026). An
+    entry is about today when the owner's own question says so."""
+    folded = normalize_fold(text)
+    if _TODAY_RE.search(folded) or not _OTHER_DAY_RE.search(folded):
+        return items
+    return [item for item in items if not _TODAY_RE.search(normalize_fold(item.question))]
 
 
 def _price_question(text: str) -> bool:
@@ -2500,6 +2574,55 @@ def _pending_total(state: DialogState) -> int | None:
     return None
 
 
+#: "кроме фисташкового", "ба ғайр аз шоколадӣ", "бе фисташка" — a flavour left out of the mix.
+_EXCEPT_RE = re.compile(r"\b(?:кроме|без|за исключением|ба гайр аз|гайр аз|бидуни|бе)\s+(.+)$")
+
+
+def _excepting_mix(text: str) -> bool:
+    """"По одному виду кроме фисташкового" — a mix with a flavour left out. Only a mix: "синнамон без
+    глазури" is a wish about one product, not an exclusion."""
+    return is_mix_mention(text) and _EXCEPT_RE.search(normalize_fold(text)) is not None
+
+
+def _without_excepted(flavours: list[Product], text: str) -> list[Product]:
+    """The flavours of a mix minus the ones the customer leaves out: "по одному виду кроме
+    фисташкового" is five rolls, not six (archive, 24.09.2026 — the owner: «это 5, у нас 4 или 8»)."""
+    match = _EXCEPT_RE.search(normalize_fold(text))
+    if match is None:
+        return flavours
+    excluded: set[int] = set()
+    for word in match.group(1).split():
+        if len(word) < 4:
+            continue
+        # "фисташкового" is not "Фисташковый синнамон" to the matcher (a case ending on half a name),
+        # so the stem decides: the first five letters of a word of the flavour's name.
+        stem = word[:5]
+        named = {
+            product.id
+            for product in flavours
+            if any(token.startswith(stem) for token in normalize_fold(product.name).split() if len(token) >= 4)
+        }
+        if named and len(named) < len(flavours):  # "кроме синнамонов" names them all, so none
+            excluded |= named
+    return [product for product in flavours if product.id not in excluded]
+
+
+def _excepted_ids(products: list[Product], message: str) -> set[int]:
+    """The flavours an excepting mix leaves out (empty when the message is no such mix)."""
+    if not _excepting_mix(message):
+        return set()
+    flavours = flavour_bases(products)
+    return {product.id for product in flavours} - {product.id for product in _without_excepted(flavours, message)}
+
+
+def _mix_text(mention_text: str, message: str) -> str:
+    """The words that describe the mix: the model may cut "можно все по одной на пробу" down to a bare
+    "все" — then the whole message says it (archive replay, 24.09.2026)."""
+    if is_general_mention(mention_text) and not is_mix_mention(mention_text) and is_mix_mention(message):
+        return message
+    return mention_text
+
+
 def _open_generic(state: DialogState) -> dict[str, Any] | None:
     """The "какие именно?" still waiting for flavours with a count ("4 синнамона"), if any."""
     for entry in reversed(state.pending_items):
@@ -2522,7 +2645,7 @@ def _mix_items(
     """
     if not is_mix_mention(text):
         return None
-    flavours = flavour_bases(products)
+    flavours = _without_excepted(flavour_bases(products), text)
     # "по одному каждого" names the count itself: as many as there are flavours
     total = len(flavours) if _ONE_OF_EACH_RE.search(normalize_fold(text)) else mention.quantity or _pending_total(state)
     if len(flavours) < 2 or not total or total % len(flavours):

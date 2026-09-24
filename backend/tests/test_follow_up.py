@@ -4,6 +4,7 @@ The bot starts these messages itself, so the tests that matter most are the ones
 a dialog an operator is looking at, a customer who wrote last, the night, the closed 24-hour window.
 """
 
+import sys
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -21,6 +22,18 @@ from app.services.dialog_state import AWAITING_CONFIRMATION, AWAITING_MISSING_FI
 from app.services.follow_up_service import FollowUpService, run_follow_ups
 from app.services.settings_service import SettingsService
 from tests.test_dialog_service import make_conversation  # noqa: F401 - fixture used by name
+
+#: 07:00 UTC = 12:00 in Dushanbe — inside the working hours whenever the suite runs. Without it the
+#: tests that expect a follow-up failed before 9:00 local time (seen 24.09.2026 at 08:10).
+_MIDDAY_UTC_HOUR = 7
+
+
+@pytest.fixture(autouse=True)
+def midday(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The service and these helpers share one clock, fixed at midday in Dushanbe."""
+    fixed = now_utc().replace(hour=_MIDDAY_UTC_HOUR, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(sys.modules["app.services.follow_up_service"], "now_utc", lambda: fixed)
+    monkeypatch.setattr(sys.modules[__name__], "now_utc", lambda: fixed)
 
 
 class FakeQueue:

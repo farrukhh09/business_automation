@@ -390,6 +390,10 @@ def is_mix_mention(text: str | None) -> bool:
         return True
     if any(token.startswith("кажд") for token in tokens) and any(token.startswith("одн") for token in tokens):
         return True  # "по одному каждого"
+    if "по" in tokens and any(token.startswith("одн") for token in tokens) and any(
+        token.startswith(_MIX_ALL + ("вид", "вкус")) for token in tokens
+    ):
+        return True  # "можно все по одной на пробу", "по одному виду кроме фисташкового" (archive, 24.09)
     if any(token.startswith(_MIX_OF) for token in tokens):
         return any(token.startswith(_MIX_ALL + _MIX_ANY) for token in tokens)
     # "все разные", "пусть будут любые": only such words — "в разные дни" is about something else

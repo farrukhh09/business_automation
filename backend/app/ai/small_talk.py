@@ -25,6 +25,9 @@ class SmallTalk(StrEnum):
     DONE = "done"  # "это всё", "больше ничего" — nothing more to add to the order; go on
     DECLINE = "decline"  # "тогда не надо", "дорого, спасибо" — the customer is backing out
     PING = "ping"  # "алло", "вы тут?", "?" — the customer checks that somebody is there
+    CONFUSED = "confused"  # "не понял", "что?", "в смысле?" — our last reply was not clear
+    HOW = "how"  # "как дела?", "шумо нағз ми?" — asked out of politeness
+    WHO = "who"  # "вы кто?", "вы бот?", "как вас зовут?" — who is writing
     NONE = "none"
 
 
@@ -274,6 +277,61 @@ _PING = (
     "ҷавоб диҳед",
 )
 
+#: "Извините, что?)", "не понял", "в смысле?", "нафаҳмидам" — the customer did not understand our last
+#: message (archive, 24.09.2026). The reply apologises and asks the open question again; the old
+#: "не получилось понять сообщение" put the misunderstanding on the customer.
+_CONFUSED = (
+    "что",
+    "чего",
+    "извините что",
+    "простите что",
+    "не понял",
+    "не поняла",
+    "не понятно",
+    "непонятно",
+    "в смысле",
+    "как это",
+    "нафахмидам",
+    "нафахмидем",
+    "чи",
+    "чи гуфтед",
+)
+
+#: "Как дела?", "Shumo nagzmi?" (archive, 24.09.2026) — answered politely, without the model.
+_HOW = (
+    "как дела",
+    "как ваши дела",
+    "как вы",
+    "как поживаете",
+    "шумо нагз ми",
+    "шумо нагзми",
+    "нагз ми",
+    "нагзми",
+    "чи хел шумо",
+    "чихел шумо",
+    "корхо нагз",
+    "shumo nagzmi",
+    "kak dela",
+)
+
+#: "Вас как зовут?", "вы бот?" — the bot says honestly that it is the bakery's assistant (prompt rule 14).
+_WHO = (
+    "вы кто",
+    "кто вы",
+    "кто это",
+    "вас как зовут",
+    "как вас зовут",
+    "как тебя зовут",
+    "вы бот",
+    "ты бот",
+    "это бот",
+    "вы робот",
+    "вы человек",
+    "шумо бот",
+    "шумо ки",
+    "номатон чи",
+)
+
 _GREETING_CATEGORY = "greeting:"
 
 _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
@@ -284,6 +342,9 @@ _MARKERS, _MAX_PHRASE_LEN = build_phrase_index(
         ("done", _DONE),
         ("decline", _DECLINE),
         ("ping", _PING),
+        ("confused", _CONFUSED),
+        ("how", _HOW),
+        ("who", _WHO),
         *((f"{_GREETING_CATEGORY}{greeting.value}", phrases) for greeting, phrases in _GREETINGS.items()),
     ]
 )
@@ -320,6 +381,12 @@ def detect_small_talk(text: str | None) -> SmallTalk:
         return SmallTalk.DECLINE  # before "thanks": "дорого, спасибо" is a refusal, not gratitude
     if "ping" in found:
         return SmallTalk.PING  # "Здравствуйте, вы тут?" asks whether anybody answers
+    if "confused" in found:
+        return SmallTalk.CONFUSED
+    if "who" in found:
+        return SmallTalk.WHO
+    if "how" in found:
+        return SmallTalk.HOW
     if "done" in found:
         return SmallTalk.DONE
     if "thanks" in found:

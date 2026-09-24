@@ -161,7 +161,8 @@ def uses_template(plan: ReplyPlan) -> bool:
         return True
     if plan.kind == ReplyKind.SMALL_TALK:
         # "again": the model's words were the ones that came out the same twice
-        return plan.facts.get("small_talk") in ("ack", "done", "ping") or bool(plan.facts.get("again"))
+        kinds = ("ack", "done", "ping", "confused", "how", "who")
+        return plan.facts.get("small_talk") in kinds or bool(plan.facts.get("again"))
     if plan.kind in (ReplyKind.PRODUCT_INFO, ReplyKind.UNKNOWN_PRODUCT):
         # Names, prices and "такого у нас нет" are data. The whole price list worded by the model grew
         # into a wall of text with invented sizes (23.09.2026), and a question about one product
