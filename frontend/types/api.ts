@@ -1052,6 +1052,11 @@ export interface WarehouseSettings {
 export interface BusinessSettings {
   business_name: string;
   ai_enabled: boolean;
+  /**
+   * Test mode (06 §1a): the bot answers real Instagram messages only in the panel — nothing it writes
+   * is sent; the manager's replies from the Instagram app are recorded into the same dialogs.
+   */
+  bot_shadow_mode: boolean;
   voice_replies_enabled: boolean;
   warehouse: WarehouseSettings;
   pickup_address: string;

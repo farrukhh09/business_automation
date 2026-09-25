@@ -62,6 +62,20 @@ function MessageContent({ message }: { message: MessageOut }) {
   return <p className="text-sm whitespace-pre-wrap break-words">{message.text ?? "—"}</p>;
 }
 
+/**
+ * Test mode (06 §1a): a reply the system wrote by itself is held back — outgoing, `NOT_APPLICABLE`,
+ * with the note in `error`. An operator message nobody sent from the panel was written in the
+ * Instagram app and recorded from its webhook.
+ */
+function isHeldBack(message: MessageOut): boolean {
+  return message.direction === "OUTGOING" && message.delivery_status === "NOT_APPLICABLE" && Boolean(message.error);
+}
+
+function senderLabel(message: MessageOut): string {
+  if (message.sender === "OPERATOR" && message.sent_by_user_id === null) return "Менеджер в Instagram";
+  return MESSAGE_SENDER_LABELS[message.sender];
+}
+
 /** One chat bubble, styled by direction (left/right) and sender. System messages are centered. */
 export function MessageBubble({ message }: MessageBubbleProps) {
   if (message.sender === "SYSTEM") {
@@ -86,7 +100,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         )}
       >
         <div className={clsx("mb-1 text-xs font-medium", message.sender === "OPERATOR" ? "text-white/80" : "text-slate-500")}>
-          {MESSAGE_SENDER_LABELS[message.sender]}
+          {senderLabel(message)}
         </div>
         <MessageContent message={message} />
       </div>
@@ -96,6 +110,13 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           <Badge tone={INTENT_TONES[message.intent as Intent] ?? "gray"} className="text-[11px]">
             {labelOf(INTENT_LABELS, message.intent)}
           </Badge>
+        ) : null}
+        {isHeldBack(message) ? (
+          <span title={message.error ?? undefined}>
+            <Badge tone="amber" className="text-[11px]">
+              Тест · не отправлено
+            </Badge>
+          </span>
         ) : null}
         {isOutgoing && message.delivery_status !== "NOT_APPLICABLE" ? (
           <span title={message.delivery_status === "FAILED" ? (message.error ?? undefined) : undefined}>

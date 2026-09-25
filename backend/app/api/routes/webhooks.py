@@ -3,7 +3,8 @@
 - ``GET  /api/webhooks/instagram``  subscription check: ``hub.mode=subscribe`` and
   ``hub.verify_token == INSTAGRAM_VERIFY_TOKEN`` → ``hub.challenge`` as text/plain, otherwise 403;
 - ``POST /api/webhooks/instagram``  ``X-Hub-Signature-256`` over the raw body → one Celery task per
-  customer message → 200 at once. No heavy work here (06 §5).
+  customer message (and per business reply, for test mode — 06 §1a) → 200 at once. No heavy work
+  here (06 §5).
 
 Signature secrets are ``INSTAGRAM_APP_SECRET`` / ``META_APP_SECRET``. Without any secret the webhook
 answers 503 — except with ``APP_ENV=development``, where the check is skipped with a warning (06 §1).
@@ -81,7 +82,13 @@ async def receive_instagram_webhook(request: Request, settings: AppSettings, que
     except ValueError as exc:
         raise BadRequestError("Тело webhook не является JSON") from exc
 
-    events = [event for event in parse_webhook(payload) if event.is_customer_message and not event.is_deleted]
+    # A business reply (the manager answering in the Instagram app) goes on too: in test mode it is
+    # recorded next to the bot's answer (06 §1a); otherwise the task drops it at once.
+    events = [
+        event
+        for event in parse_webhook(payload)
+        if (event.is_customer_message or event.is_business_reply) and not event.is_deleted
+    ]
     queued = await run_in_threadpool(_enqueue, queue, [event.model_dump(mode="json") for event in events])
     log_event(logger, "instagram.webhook_received", events=len(events), queued=queued)
     if queued < len(events):

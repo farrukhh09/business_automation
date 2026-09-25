@@ -97,6 +97,13 @@ class InstagramEvent(BaseModel):
         return not (self.is_echo or self.is_self)
 
     @property
+    def is_business_reply(self) -> bool:
+        """The business account wrote to a customer — a manager answering in the Instagram app, or an
+        echo of what the bot sent. Arrives with ``is_echo`` or just with ``sender == entry.id``; a note
+        to oneself (``recipient`` is the account too) is not one."""
+        return self.sender_id == self.account_id and self.recipient_id != self.account_id
+
+    @property
     def message_type(self) -> MessageType:
         """VOICE if any attachment is audio, else IMAGE if any is an image, else TEXT."""
         kinds = {attachment.message_type for attachment in self.attachments}

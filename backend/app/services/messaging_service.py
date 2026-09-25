@@ -11,7 +11,10 @@ Rules:
 - throttling / 5xx / network errors are retried by the task (``RetryableDeliveryError``) unless it
   is the final attempt or a part of a split text was already delivered (a retry would duplicate it);
 - a voice reply (06 §3) is a separate ``VOICE`` message whose audio Instagram downloads from
-  ``{PUBLIC_BASE_URL}/api/media/tts-….m4a``.
+  ``{PUBLIC_BASE_URL}/api/media/tts-….m4a``;
+- test mode (``bot_shadow_mode``, 06 §1a): whatever the system writes by itself — the bot's replies,
+  the price list photo, follow-ups — is held back (``NOT_APPLICABLE`` + ``SHADOW_NOTE``) and never
+  reaches Instagram; only what a staff member writes in the panel is sent.
 """
 
 import logging
@@ -38,6 +41,7 @@ from app.models.user import User
 from app.repositories.conversations import MessageRepository
 from app.services.instagram_token_service import InstagramTokenService
 from app.services.media_storage import TTS_PREFIX, MediaStorage
+from app.services.settings_service import SettingsService
 
 logger = get_logger(__name__)
 
@@ -51,6 +55,7 @@ __all__ = [
 WINDOW_CLOSED_DETAIL = "Прошло более 24 часов с последнего сообщения клиента — Instagram не разрешает отправить ответ"
 NO_INSTAGRAM_ACCOUNT_DETAIL = "У клиента нет Instagram-аккаунта: сообщение некуда отправить"
 NOT_CONFIGURED_DETAIL = "Instagram не настроен: сообщение не отправлено"
+SHADOW_NOTE = "Тестовый режим: ответ бота не отправлен клиенту, он виден только в админке"
 MAX_ERROR_CHARS = 500
 
 
@@ -155,6 +160,8 @@ class MessagingService:
             return None
         if message.direction != MessageDirection.OUTGOING or message.delivery_status != MessageDeliveryStatus.PENDING:
             return message
+        if message.sender != MessageSender.OPERATOR and SettingsService(self.db).get().bot_shadow_mode:
+            return self._hold(message)
 
         conversation = message.conversation
         recipient = (conversation.customer.instagram_user_id or "").strip()
@@ -258,6 +265,15 @@ class MessagingService:
             url = self.media.public_url(filename, self.settings.PUBLIC_BASE_URL)
             return [messenger.send_image(recipient, url)]
         return messenger.send_text(recipient, message.text or "")
+
+    def _hold(self, message: Message) -> Message:
+        """Test mode: the message stays in the panel. Not ``FAILED`` — nothing went wrong — and never
+        ``PENDING`` again: switching test mode off must not send yesterday's answers."""
+        message.delivery_status = MessageDeliveryStatus.NOT_APPLICABLE
+        message.error = SHADOW_NOTE
+        self.db.commit()
+        log_event(logger, "message.shadowed", message_id=message.id, conversation_id=message.conversation_id)
+        return message
 
     def _fail(self, message: Message, error: str) -> Message:
         message.delivery_status = MessageDeliveryStatus.FAILED

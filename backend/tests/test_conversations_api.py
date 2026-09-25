@@ -284,6 +284,21 @@ def test_signed_webhook_enqueues_one_task_per_customer_message(
     assert events[0]["sender_id"] == "5550001" and events[0]["account_id"] == ACCOUNT
 
 
+def test_webhook_passes_on_the_manager_s_reply_to_a_customer(
+    client, webhook_settings: Settings, queue: RecordingQueue
+) -> None:
+    """Test mode (06 §1a) records what the manager wrote in the Instagram app; the task decides."""
+    reply = _message("mid.m1", text="10 сомони", sender=ACCOUNT, is_echo=True)
+    reply["recipient"] = {"id": "5550001"}
+    body = _payload(reply)
+
+    response = client.post("/api/webhooks/instagram", content=body, headers={"X-Hub-Signature-256": _signature(body)})
+
+    assert response.status_code == 200
+    [queued] = queue.of("process_instagram_event")
+    assert (queued["mid"], queued["is_echo"], queued["recipient_id"]) == ("mid.m1", True, "5550001")
+
+
 def test_webhook_with_a_bad_signature_is_rejected(client, webhook_settings: Settings, queue: RecordingQueue) -> None:
     body = _payload(_message("mid.1"))
     for header in ({"X-Hub-Signature-256": _signature(body, "other-secret")}, {}):

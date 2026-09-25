@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { ShadowModeBanner } from "@/components/layout/ShadowModeBanner";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { Spinner } from "@/components/ui/Spinner";
@@ -58,6 +59,7 @@ export default function PanelLayout({ children }: { children: ReactNode }) {
       <Sidebar mobileOpen={menuOpen} onMobileClose={() => setMenuPath(null)} />
       <div className="flex min-h-dvh min-w-0 flex-col lg:pl-64">
         <Topbar onMenuClick={() => setMenuPath(pathname ?? "/")} menuOpen={menuOpen} />
+        <ShadowModeBanner />
         <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 focus:outline-none sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-7xl">{children}</div>
         </main>

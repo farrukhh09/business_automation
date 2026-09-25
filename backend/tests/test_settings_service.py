@@ -19,6 +19,7 @@ from app.services.settings_service import BUSINESS_SETTINGS_KEY, SettingsService
 CONTRACT_KEYS = {
     "business_name",
     "ai_enabled",
+    "bot_shadow_mode",
     "voice_replies_enabled",
     "warehouse",
     "pickup_address",

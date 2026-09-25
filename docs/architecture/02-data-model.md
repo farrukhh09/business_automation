@@ -201,9 +201,9 @@ id PK; token str(64) U (secrets.token_urlsafe); delivery_id FK→deliveries (cas
 | ai_processed | bool, default false | |
 | intent | str(32)? | |
 | ai_payload | JSON? | структурированный результат понимания (без секретов) |
-| delivery_status | MessageDeliveryStatus, default NOT_APPLICABLE | для исходящих |
+| delivery_status | MessageDeliveryStatus, default NOT_APPLICABLE | для исходящих; исходящее с `NOT_APPLICABLE` и заметкой в `error` — ответ, придержанный тестовым режимом (06 §1a) |
 | error | text? | |
-| sent_by_user_id | FK→users? | исходящее от оператора |
+| sent_by_user_id | FK→users? | исходящее от оператора; `OPERATOR` без него — ответ менеджера из приложения Instagram, записанный в тестовом режиме (`ai_payload.source = "instagram_app"`) |
 | created_at | datetime | (без updated_at) |
 
 ## faq_items — `FaqItem`

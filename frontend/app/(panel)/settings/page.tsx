@@ -21,6 +21,7 @@ const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"] as con
 interface FormState {
   business_name: string;
   ai_enabled: boolean;
+  bot_shadow_mode: boolean;
   voice_replies_enabled: boolean;
   warehouse_name: string;
   warehouse_address: string;
@@ -55,6 +56,7 @@ function toFormState(settings: BusinessSettings): FormState {
   return {
     business_name: settings.business_name,
     ai_enabled: settings.ai_enabled,
+    bot_shadow_mode: settings.bot_shadow_mode,
     voice_replies_enabled: settings.voice_replies_enabled,
     warehouse_name: settings.warehouse.name,
     warehouse_address: settings.warehouse.address,
@@ -90,6 +92,7 @@ function toUpdateBody(form: FormState): BusinessSettingsUpdate {
   return {
     business_name: form.business_name.trim(),
     ai_enabled: form.ai_enabled,
+    bot_shadow_mode: form.bot_shadow_mode,
     voice_replies_enabled: form.voice_replies_enabled,
     warehouse: {
       name: form.warehouse_name.trim(),
@@ -284,6 +287,13 @@ export default function SettingsPage() {
               disabled={disabled}
               label="AI-ответы включены"
               description="При выключении бот перестаёт отвечать клиентам автоматически — все диалоги нужно вести вручную."
+            />
+            <Switch
+              checked={form.bot_shadow_mode}
+              onCheckedChange={(value) => update("bot_shadow_mode", value)}
+              disabled={disabled}
+              label="Тестовый режим"
+              description="Бот читает настоящие сообщения из Instagram и готовит ответы, но клиентам ничего не отправляет: его ответы видны только здесь, в «Диалогах», с пометкой «Тест · не отправлено». Менеджер отвечает в Instagram как обычно, и его ответы записываются в тот же диалог — для сравнения."
             />
             <Switch
               checked={form.voice_replies_enabled}

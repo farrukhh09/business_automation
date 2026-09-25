@@ -1,5 +1,6 @@
 """Incoming messages and outgoing delivery (SPEC §37, 06-integrations.md §1, §3, §5)."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -400,6 +401,116 @@ def test_delivery_is_idempotent_and_not_configured_instagram_fails_cleanly(db: S
     db.commit()
     MessagingService(db, messenger=messenger, media=media).deliver(reply.id)
     assert messenger.sent_texts == []
+
+
+# --------------------------------------------------------------------------- test mode (06 §1a)
+
+
+@pytest.fixture
+def test_mode(db: Session) -> None:
+    SettingsService(db).update({"bot_shadow_mode": True})
+
+
+def manager_reply(
+    mid: str = "mid.m1", text: str = "Здравствуйте! 10 сомони за штуку", *, is_echo: bool = True
+) -> dict[str, Any]:
+    """What the manager writes in the Instagram app: the business account → the customer."""
+    return event(mid=mid, text=text, sender=ACCOUNT, recipient_id="5550001", is_echo=is_echo)
+
+
+@pytest.mark.usefixtures("test_mode")
+def test_in_test_mode_the_bot_answers_only_in_the_panel(
+    db: Session, queue: InlineQueue, messenger: FakeMessenger
+) -> None:
+    queue._inbound().handle_event(event())
+
+    [reply] = outgoing(db)
+    assert reply.sender == MessageSender.AI and reply.text
+    assert reply.delivery_status == MessageDeliveryStatus.NOT_APPLICABLE
+    assert reply.error.startswith("Тестовый режим")
+    assert messenger.sent_texts == [] and messenger.sent_images == []
+
+
+@pytest.mark.usefixtures("test_mode")
+def test_in_test_mode_the_manager_s_reply_from_instagram_is_recorded_next_to_the_bot_s(
+    db: Session, queue: InlineQueue, messenger: FakeMessenger, llm: ScriptedLLM
+) -> None:
+    service = queue._inbound()
+    service.handle_event(event())
+    calls = len(llm.json_calls)
+
+    result = service.handle_event(manager_reply())
+
+    assert result.status == "recorded"
+    manager = db.get(Message, result.message_id)
+    assert (manager.direction, manager.sender, manager.delivery_status) == (
+        MessageDirection.OUTGOING,
+        MessageSender.OPERATOR,
+        MessageDeliveryStatus.SENT,
+    )
+    assert manager.text == "Здравствуйте! 10 сомони за штуку" and manager.sent_by_user_id is None
+    assert manager.ai_payload == {"source": "instagram_app"}
+    conversation = db.scalars(select(Conversation)).one()  # the same dialog as the customer's message
+    assert conversation.mode == ConversationMode.AI  # the bot keeps preparing answers
+    assert len(llm.json_calls) == calls  # nothing to answer: it is not the customer's message
+    assert service.handle_event(manager_reply()).status == "duplicate"
+    # Without the echo flag (sender == entry.id) it is the manager's message all the same
+    assert service.handle_event(manager_reply(mid="mid.m2", is_echo=False)).status == "recorded"
+    assert messenger.sent_texts == []
+
+    service.handle_event(event(mid="mid.3", text="Хорошо, давайте 4"))
+
+    # the customer answers the manager, so the model reads what the manager said
+    prompt = json.dumps(llm.json_calls[-1]["messages"], ensure_ascii=False)
+    assert "[operator] Здравствуйте! 10 сомони за штуку" in prompt
+
+
+def test_without_test_mode_the_manager_s_reply_is_not_recorded(db: Session, queue: InlineQueue) -> None:
+    assert queue._inbound().handle_event(manager_reply()).status == "ignored"
+    assert db.scalars(select(Message)).all() == []
+
+
+@pytest.mark.usefixtures("test_mode")
+def test_in_test_mode_a_staff_member_s_message_from_the_panel_is_sent(
+    db: Session, messenger: FakeMessenger, media: MediaStorage
+) -> None:
+    reply = _conversation_with_reply(db, RecordingQueue(), messenger, media)
+    service = MessagingService(db, messenger=messenger, media=media)
+    operator = service.create_outgoing(reply.conversation, "Добрый день!", sender=MessageSender.OPERATOR)
+
+    service.deliver(reply.id)
+    service.deliver(operator.id)
+
+    assert reply.delivery_status == MessageDeliveryStatus.NOT_APPLICABLE
+    assert operator.delivery_status == MessageDeliveryStatus.SENT
+    assert messenger.sent_texts == [("5550001", "Добрый день!")]
+
+
+def test_switching_test_mode_off_does_not_send_the_held_answers(
+    db: Session, messenger: FakeMessenger, media: MediaStorage
+) -> None:
+    SettingsService(db).update({"bot_shadow_mode": True})
+    reply = _conversation_with_reply(db, RecordingQueue(), messenger, media)
+    service = MessagingService(db, messenger=messenger, media=media)
+    service.deliver(reply.id)
+
+    SettingsService(db).update({"bot_shadow_mode": False})
+    service.deliver(reply.id)  # a late retry of the task
+
+    assert reply.delivery_status == MessageDeliveryStatus.NOT_APPLICABLE and messenger.sent_texts == []
+
+
+@pytest.mark.usefixtures("test_mode")
+def test_in_test_mode_no_voice_reply_is_synthesized(db: Session, messenger: FakeMessenger, media: MediaStorage) -> None:
+    SettingsService(db).update({"voice_replies_enabled": True})
+    tts = FakeTTS()
+    llm = ScriptedLLM({"Привет": understanding(intent="GREETING")})
+    queue = InlineQueue(db, messenger=messenger, llm=llm, media=media, stt=FakeSTT(transcript("Привет")), tts=tts)
+
+    queue._inbound().handle_event(voice_event())
+
+    assert [reply.message_type for reply in outgoing(db)] == [MessageType.TEXT]
+    assert tts.calls == []
 
 
 # --------------------------------------------------------------------------- media housekeeping

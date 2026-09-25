@@ -15,6 +15,10 @@
 
 If the dialog crashes on an unexpected error, the customer is not left without an answer: the
 conversation is handed over to an operator with the standard handoff message.
+
+Test mode (``bot_shadow_mode``, 06 §1a): everything above runs as usual, the replies are held back by
+``MessagingService.deliver``; a message the business itself wrote to the customer (the manager in the
+Instagram app) is recorded in the dialog as the operator's (``_record_business_reply``).
 """
 
 import logging
@@ -63,6 +67,10 @@ STATUS_PROCESSED = "processed"
 STATUS_DUPLICATE = "duplicate"
 STATUS_IGNORED = "ignored"
 STATUS_VOICE_QUEUED = "voice_queued"
+STATUS_RECORDED = "recorded"
+
+#: ``ai_payload.source`` of a manager's message recorded from the Instagram app in test mode.
+BUSINESS_REPLY_SOURCE = "instagram_app"
 
 VOICE_NO_URL = "Голосовое сообщение пришло без ссылки на аудио"
 VOICE_DOWNLOAD_FAILED = "Не удалось скачать голосовое сообщение"
@@ -133,6 +141,8 @@ class InboundMessageService:
         """
         if not isinstance(event, InstagramEvent):
             event = InstagramEvent.model_validate(event)
+        if event.is_business_reply and not event.is_deleted and SettingsService(self.db).get().bot_shadow_mode:
+            return self._record_business_reply(event)
         if not event.is_customer_message or event.is_deleted:
             reason = "deleted" if event.is_deleted else "echo_or_self"
             log_event(logger, "instagram.event_ignored", mid=event.mid, reason=reason)
@@ -178,6 +188,42 @@ class InboundMessageService:
         if message.message_type == MessageType.IMAGE:
             self._store_image(message, event, stored_image)
         return self.process_message(message)
+
+    def _record_business_reply(self, event: InstagramEvent) -> InboundResult:
+        """Test mode (06 §1a): what the manager wrote in the Instagram app goes into the dialog as an
+        operator message, next to the answer the bot prepared — the panel shows both, and the model
+        reads it as the operator's turn. The dialog itself is left alone: no mode change, no alert."""
+        if self.messages.get_by_instagram_message_id(event.mid) is not None:
+            log_event(logger, "instagram.event_duplicate", mid=event.mid)
+            return InboundResult(STATUS_DUPLICATE)
+        customer = self._customer(event)
+        conversation = self.conversations.get_or_create_instagram(customer, event.conversation_key)
+        sent_at = min(event.timestamp, now_utc())
+        image = next(iter(event.image_attachments), None)
+        message = Message(
+            conversation_id=conversation.id,
+            direction=MessageDirection.OUTGOING,
+            message_type=MessageType.IMAGE if image is not None else MessageType.TEXT,
+            sender=MessageSender.OPERATOR,
+            text=event.display_text,
+            media_url=image.url if image is not None else None,  # the CDN link works for a while
+            instagram_message_id=event.mid,
+            delivery_status=MessageDeliveryStatus.SENT,
+            ai_payload={"source": BUSINESS_REPLY_SOURCE},
+            created_at=sent_at,
+        )
+        conversation.last_message_at = _latest(conversation.last_message_at, sent_at)
+        self.db.add(message)
+        try:
+            self.db.commit()
+        except IntegrityError:
+            self.db.rollback()
+            log_event(logger, "instagram.event_duplicate", mid=event.mid, concurrent=True)
+            return InboundResult(STATUS_DUPLICATE)
+        log_event(
+            logger, "instagram.business_reply_recorded", conversation_id=conversation.id, message_id=message.id
+        )
+        return InboundResult(STATUS_RECORDED, message.id)
 
     def _customer(self, event: InstagramEvent) -> Customer:
         igsid = event.customer_id
@@ -331,7 +377,8 @@ class InboundMessageService:
     def synthesize_voice_reply(self, message_id: int) -> Message | None:
         """Task ``synthesize_voice_reply`` (06 §3): only while voice replies are switched on."""
         source = self.messages.get(message_id)
-        if source is None or not SettingsService(self.db).get().voice_replies_enabled:
+        business = SettingsService(self.db).get()
+        if source is None or not business.voice_replies_enabled or business.bot_shadow_mode:
             return None
         try:
             tts = self._tts or get_tts(self.settings)
@@ -369,10 +416,12 @@ class InboundMessageService:
             sent.append(picture.id)
         reply = self._store_reply(conversation, outcome.reply)
         self.queue.send_message(reply.id)
+        business = SettingsService(self.db).get()
         if (
             incoming is not None
             and incoming.message_type == MessageType.VOICE
-            and SettingsService(self.db).get().voice_replies_enabled
+            and business.voice_replies_enabled
+            and not business.bot_shadow_mode  # nothing would be sent: no speech to pay for
         ):
             self.queue.synthesize_voice_reply(reply.id)
         return [*sent, reply.id]

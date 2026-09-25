@@ -71,6 +71,10 @@ class BusinessSettings(BaseModel):
 
     business_name: str = Field(default=DEFAULT_BUSINESS_NAME, min_length=1, max_length=SHORT_TEXT_MAX)
     ai_enabled: bool = True
+    # Test mode (06 §1a, 25.09.2026): the bot reads the real Instagram messages and prepares its answers,
+    # but nothing it writes leaves the admin panel; the manager keeps answering in Instagram, and those
+    # answers are recorded next to the bot's for comparison.
+    bot_shadow_mode: bool = False
     voice_replies_enabled: bool = False
     warehouse: Warehouse = Field(default_factory=Warehouse)
     pickup_address: str = Field(default="", max_length=ADDRESS_MAX)
@@ -150,6 +154,7 @@ class BusinessSettingsUpdate(BaseModel):
 
     business_name: str | None = Field(default=None, min_length=1, max_length=SHORT_TEXT_MAX)
     ai_enabled: bool | None = None
+    bot_shadow_mode: bool | None = None
     voice_replies_enabled: bool | None = None
     warehouse: WarehouseUpdate | None = None
     pickup_address: str | None = Field(default=None, max_length=ADDRESS_MAX)

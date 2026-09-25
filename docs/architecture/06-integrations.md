@@ -9,7 +9,7 @@
 - `webhook.py`
   - `verify_subscription(mode, token, challenge, settings) -> str | None`.
   - `verify_signature(raw_body: bytes, header: str | None, secrets: list[str]) -> bool` — `X-Hub-Signature-256: sha256=<hex>` = HMAC-SHA256(raw body), `hmac.compare_digest`. Секреты: `INSTAGRAM_APP_SECRET` (+ опционально `META_APP_SECRET` — какой секрет применяется, в документации не подтверждено, поэтому проверяем по списку). Пустой список секретов в production → 503, в `APP_ENV=development` допускается пропуск проверки с WARNING-логом.
-  - `parse_webhook(payload) -> list[InstagramEvent]`: `object == "instagram"`, `entry[].messaging[]`; `InstagramEvent{account_id (entry.id), sender_id, recipient_id, timestamp, mid, text, attachments: [{type, url}], is_echo, is_deleted, is_self, reply_to_mid}`. Пропускать `is_echo`, `is_self`, `read`, `reaction`, события без `message`. Типы вложений: `audio` → VOICE, `image` → IMAGE, прочие (`video`, `file`, `share`, `ig_reel`, `story_mention`, ...) → TEXT с пометкой `[вложение: type]` (story_mention: медиа не сохранять).
+  - `parse_webhook(payload) -> list[InstagramEvent]`: `object == "instagram"`, `entry[].messaging[]`; `InstagramEvent{account_id (entry.id), sender_id, recipient_id, timestamp, mid, text, attachments: [{type, url}], is_echo, is_deleted, is_self, reply_to_mid}`. Пропускать `is_echo`, `is_self`, `read`, `reaction`, события без `message` (исключение — ответ бизнеса клиенту в тестовом режиме, §1a). Типы вложений: `audio` → VOICE, `image` → IMAGE, прочие (`video`, `file`, `share`, `ig_reel`, `story_mention`, ...) → TEXT с пометкой `[вложение: type]` (story_mention: медиа не сохранять).
 - `client.py` — `InstagramClient(settings, http: httpx.Client)`:
   - `send_text(recipient_id, text) -> str (message_id)` → `POST {INSTAGRAM_GRAPH_URL}/{INSTAGRAM_API_VERSION}/{INSTAGRAM_ACCOUNT_ID}/messages`, `Authorization: Bearer {INSTAGRAM_ACCESS_TOKEN}`, `{"recipient": {"id": ...}, "message": {"text": ...}}`. Текст > 1000 байт UTF-8 → разбиение на части (по абзацам/предложениям).
   - `send_audio(recipient_id, public_url)` → `{"message": {"attachment": {"type": "audio", "payload": {"url": ...}}}}` (форматы aac/m4a/wav/mp4, ≤25MB).
@@ -20,6 +20,17 @@
   - Ошибки: 4xx/5xx → `InstagramAPIError(code, subcode, message)`; 80002 (throttling)/5xx → retry в Celery с backoff.
 - 24-часовое окно: исходящие сообщения бота и оператора разрешены, если `now − conversation.last_customer_message_at < 24h`; иначе оператору 409 `messaging_window_closed` (HUMAN_AGENT tag не используется в MVP — требует App Review).
 - Идемпотентность: `messages.instagram_message_id` (mid) unique — повторная доставка webhook не обрабатывается дважды.
+
+### 1a. Тестовый режим (`bot_shadow_mode`, 25.09.2026)
+
+Заказчик хочет посмотреть, как бот отвечает настоящим клиентам, прежде чем пускать его в Instagram. Переключатель «Тестовый режим» в настройках бизнеса (`app_settings.business.bot_shadow_mode`, по умолчанию `false`):
+
+- **Входящие** обрабатываются как обычно: клиент, диалог, понимание, черновики, ответ бота. Бот ведёт свою линию диалога так, как будто его ответы ушли.
+- **Ничего, что система пишет сама, в Instagram не уходит.** Ответы бота, фото прайса, догоняющие вопросы и уведомления хранятся как исходящие, но `MessagingService.deliver` не отправляет их. Вместо этого он ставит `delivery_status=NOT_APPLICABLE` и `error=SHADOW_NOTE` («Тестовый режим: ответ бота не отправлен клиенту…»). Статус не `FAILED` (ничего не сломалось) и не остаётся `PENDING`: после выключения режима вчерашние ответы не уйдут запоздалым повтором задачи. Голосовые ответы в этом режиме не синтезируются. Сообщения, которые сотрудник пишет в панели (`sender=OPERATOR`), отправляются как всегда.
+- **Ответ менеджера из приложения Instagram** записывается в тот же диалог. Это сообщение, которое бизнес-аккаунт отправил клиенту: `InstagramEvent.is_business_reply`, то есть `sender == entry.id` и получатель — не сам аккаунт; приходит с `is_echo` или без него. Вебхук ставит такие события в очередь всегда, а задача пишет их только в тестовом режиме (`InboundMessageService._record_business_reply`). Запись: исходящее, `sender=OPERATOR`, `sent_by_user_id=null`, `delivery_status=SENT`, `ai_payload={"source": "instagram_app"}`, mid — для идемпотентности. Режим диалога и флаг внимания не меняются, модель не вызывается. Модель видит это сообщение в истории как `[operator]`: клиент отвечает менеджеру, и без его слов ответ клиента не понять.
+- **Вне тестового режима** такие события по-прежнему отбрасываются (в том числе эхо ответов самого бота).
+- **Панель.** Плашка «Тестовый режим» на всех страницах. У ответа бота метка «Тест · не отправлено» с подсказкой. У ответа из приложения подпись «Менеджер в Instagram» (оператор без `sent_by_user_id`).
+- **Ограничения.** Передача менеджеру (handoff) в тестовом режиме тоже только в панели: диалог переходит в `HUMAN_HANDOFF`, и бот перестаёт готовить ответы, пока сотрудник не нажмёт «Вернуть боту». Созданные ботом черновики и заказы — тестовые.
 
 ## 2. Карты (`app/integrations/maps/`)
 
